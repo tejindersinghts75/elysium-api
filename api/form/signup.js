@@ -3,8 +3,12 @@ import { getDatabase } from 'firebase-admin/database';
 import { v4 as uuidv4 } from 'uuid';
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-const app = initializeApp({ credential: cert(serviceAccount) });
+const app = initializeApp({
+  credential: cert(serviceAccount),
+  databaseURL: `https://${serviceAccount.project_id}.firebaseio.com/`  // ← ADD THIS LINE
+});
 const db = getDatabase(app);
+
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -13,9 +17,9 @@ export default async function handler(req, res) {
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
   try {
-    const { 
+    const {
       name, email, mobile, selectedCity, profession, income, household, why,
-      captchaToken, referredBy, referralId 
+      captchaToken, referredBy, referralId
     } = req.body;
 
     // 1. RATE LIMITING (1/min per IP)
@@ -110,7 +114,7 @@ export default async function handler(req, res) {
       // Find referrer's Mainformdata entry
       const referrerFormSnap = await db.ref('Mainformdata')
         .orderByChild('uid').equalTo(referredBy).once('value');
-      
+
       referrerFormSnap.forEach(snapshot => {
         const referrerKey = snapshot.key;
         db.ref(`Mainformdata/${referrerKey}/referrals/${referralId}`).update({
@@ -151,11 +155,11 @@ export default async function handler(req, res) {
 
     console.log(`Signup complete: ${userId} (${ip}) in ${Date.now() - startTime}ms`);
 
-    res.json({ 
-      success: true, 
-      userId, 
+    res.json({
+      success: true,
+      userId,
       redirect: '/thank-you',
-      message: 'Welcome to Elysium!' 
+      message: 'Welcome to Elysium!'
     });
 
   } catch (error) {
