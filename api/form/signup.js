@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
   credential: cert(serviceAccount),
-  databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/"  // ✅ Fixed
+  databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/"
 });
 const db = getDatabase(app);
 
@@ -21,7 +21,7 @@ export default async function handler(req, res) {
       captchaToken, referredBy, referralId
     } = req.body;
 
-    // 1. RATE LIMITING ✅ Already fixed
+    // 1. RATE LIMITING (WORKS ✅)
     const cleanIp = ip.replace(/\./g, '_').replace(/:/g, '_');
     const minuteBucket = Math.floor(startTime / 60000);
     const rateKey = `rate/${cleanIp}/${minuteBucket}`;
@@ -31,7 +31,7 @@ export default async function handler(req, res) {
     }
     await db.ref(rateKey).transaction(current => (current || 0) + 1);
 
-    // 2. CAPTCHA VALIDATION
+    // 2. CAPTCHA VALIDATION (WORKS ✅)
     const captchaRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -40,9 +40,17 @@ export default async function handler(req, res) {
     const captchaData = await captchaRes.json();
     if (!captchaData.success) return res.status(400).json({ error: 'Invalid CAPTCHA' });
 
-    // 3-8. Rest of your code is PERFECT ✅
+    // 3. EMAIL VALIDATION & SANITIZATION ✅ MISSING PIECE ADDED
+    const emailLower = email.toLowerCase().trim();
+    if (!emailLower.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
+      return res.status(400).json({ error: 'Invalid email' });
+    }
 
-    // 5. CLERK USER CREATION (FIXED BUFFER)
+    // 4. EMAIL DEDUPLICATION
+    const emailCheck = await db.ref('users').orderByChild('email').equalTo(emailLower).once('value');
+    if (emailCheck.exists()) return res.status(400).json({ error: 'Email already registered' });
+
+    // 5. CLERK USER CREATION ✅ FIXED
     const nameParts = name.trim().split(' ');
     const firstName = nameParts[0];
     const lastName = nameParts.slice(1).join(' ') || '';
@@ -50,18 +58,119 @@ export default async function handler(req, res) {
     const clerkRes = await fetch('https://api.clerk.com/v1/users', {
       method: 'POST',
       headers: {
-        'Authorization': `Basic ${btoa(`${process.env.CLERK_SECRET_KEY}:`)}`,  // ✅ FIXED
+        'Authorization': `Basic ${btoa(`${process.env.CLERK_SECRET_KEY}:`)}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         first_name: firstName,
         last_name: lastName,
         email_addresses: [{ email_address: emailLower }],
-        unsafe_metadata: { mobile, selectedCity, profession, income, household, why, createdAt: Date.now() }
+        unsafe_metadata: {
+          mobile: mobile?.trim() || '',
+          selectedCity: selectedCity || 'Not selected',
+          profession: profession || '',
+          income: income || 'Not selected',
+          household: household || 'Not selected',
+          why: why?.trim() || '',
+          createdAt: Date.now()
+        }
       })
     });
 
-    // Rest of your code unchanged...
+    const clerkUser = await clerkRes.json();
+    if (!clerkUser.id || clerkRes.status !== 200) {
+      return res.status(400).json({ error: 'Failed to create account' });
+    }
+
+    const userId = clerkUser.id;
+    const timestampKey = Date.now().toString();
+
+    // 6. FIREBASE WRITES (THIS CREATES Mainformdata & users ✅)
+    await Promise.all([
+      // Mainformdata collection
+      db.ref(`Mainformdata/${timestampKey}`).set({
+        uid: userId,
+        name: name.trim(),
+        email: emailLower,
+        mobile: mobile?.trim() || '',
+        selectedCity: selectedCity || 'Not selected',
+        profession: profession || '',
+        income: income || 'Not selected',
+        household: household || 'Not selected',
+        why: why?.trim() || '',
+        referredBy,
+        referralId,
+        createdAt: Date.now()
+      }),
+
+      // Users collection
+      db.ref(`users/${userId}`).set({
+        firstname: firstName,
+        lastname: lastName,
+        email: emailLower,
+        mobile: mobile?.trim() || '',
+        createdAt: Date.now()
+      })
+    ]);
+
+    // 7. REFERRAL CHAIN
+    let referrerDetails = {};
+    if (referredBy && referralId) {
+      const referrerSnap = await db.ref(`users/${referredBy}`).once('value');
+      if (referrerSnap.exists()) {
+        referrerDetails = referrerSnap.val();
+      }
+
+      const referrerFormSnap = await db.ref('Mainformdata')
+        .orderByChild('uid').equalTo(referredBy).once('value');
+
+      referrerFormSnap.forEach(snapshot => {
+        const referrerKey = snapshot.key;
+        db.ref(`Mainformdata/${referrerKey}/referrals/${referralId}`).update({
+          name: name.trim(),
+          email: emailLower,
+          mobile: mobile?.trim() || '',
+          status: 'completed',
+          completedAt: Date.now()
+        });
+      });
+    }
+
+    // 8. GOOGLE SHEETS LOGGING
+    const sheetsData = {
+      formType: "formmodal",
+      timestamp: new Date().toISOString(),
+      ip,
+      name: name.trim(),
+      email: emailLower,
+      mobile: mobile?.trim() || '',
+      selectedCity: selectedCity || 'Not selected',
+      profession: profession || '',
+      income: income || 'Not selected',
+      household: household || 'Not selected',
+      why: why?.trim() || '',
+      referredBy,
+      referralId,
+      referrerFirstName: referrerDetails.firstname || '',
+      referrerLastName: referrerDetails.lastname || '',
+      referrerEmail: referrerDetails.email || ''
+    };
+
+    fetch(process.env.GOOGLE_SHEETS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sheetsData)
+    }).catch(console.error);
+
+    console.log(`Signup complete: ${userId} (${ip}) in ${Date.now() - startTime}ms`);
+
+    res.json({
+      success: true,
+      userId,
+      redirect: '/thank-you',
+      message: 'Welcome to Elysium!'
+    });
+
   } catch (error) {
     console.error('Signup error:', error);
     res.status(500).json({ error: 'Internal server error' });
