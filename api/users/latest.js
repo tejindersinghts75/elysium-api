@@ -1,4 +1,4 @@
-// api/users/latest.js (DELETE route.js folder, create this file)
+// api/users/latest.js (NEW FILE - PAGES ROUTER)
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 
@@ -10,13 +10,18 @@ const app = initializeApp({
 const db = getDatabase(app);
 
 export default async function handler(req, res) {
-  // CORS Headers
+  // 🔥 CORS HEADERS (FIXES CORS ERROR)
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
+    return;
+  }
+
+  if (req.method !== 'GET') {
+    res.status(405).json({ error: 'Method not allowed' });
     return;
   }
 
@@ -35,7 +40,9 @@ export default async function handler(req, res) {
       });
     });
 
+    console.log(`✅ Returning ${users.length} users`);
     res.json(users.reverse()); // Newest first
+
   } catch (error) {
     console.error('Users API error:', error);
     res.status(500).json([]);
