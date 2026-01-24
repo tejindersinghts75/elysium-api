@@ -40,7 +40,7 @@ export default async function handler(req, res) {
 
 
     // 2. CAPTCHA VALIDATION (disabled for testing - UNCOMMENT FOR PRODUCTION)
-    /*
+
     const captchaRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -48,7 +48,7 @@ export default async function handler(req, res) {
     });
     const captchaData = await captchaRes.json();
     if (!captchaData.success) return res.status(400).json({ error: 'Invalid CAPTCHA' });
-    */
+
 
     // 3. VALIDATION & SANITIZATION ✅
 
