@@ -3,6 +3,7 @@ import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 import { createClerkClient } from '@clerk/backend';
 
+
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
   credential: cert(serviceAccount),
@@ -14,10 +15,25 @@ const clerkClient = createClerkClient({
   secretKey: process.env.CLERK_SECRET_KEY,
 });
 
+
+
+// 🔥 SINGLE HANDLER (NO DUPLICATES)
 export default async function handler(req, res) {
+  // 🔥 CORS HEADERS (CORRECT POSITION)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  // Handle preflight
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
 
   const startTime = Date.now();
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
