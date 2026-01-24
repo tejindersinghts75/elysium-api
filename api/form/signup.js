@@ -67,7 +67,7 @@ export default async function handler(req, res) {
     const nameParts = name.trim().split(' ');
     const firstName = nameParts[0];
     const lastName = nameParts.slice(1).join(' ') || '';
- // ✅ USERNAME GENERATION (Required field fixed!)
+    // ✅ USERNAME GENERATION (Required field fixed!)
     const username = `${firstName.toLowerCase()}${Math.floor(Math.random() * 10000)}`;
     let user;
     try {
@@ -83,7 +83,7 @@ export default async function handler(req, res) {
       if (!user) {
         user = await clerkClient.users.createUser({
           emailAddress: [emailLower],
-           username: username,  // ✅ REQUIRED FIELD!
+          username: username,  // ✅ REQUIRED FIELD!
           firstName,
           lastName,
           skipPasswordRequirement: true,
@@ -113,34 +113,32 @@ export default async function handler(req, res) {
     const timestampKey = Date.now().toString();
 
     // 6. FIREBASE WRITES (MLM STRUCTURE) ✅
+    // Replace Firebase writes section (lines 120-150):
     await Promise.all([
-      // Mainformdata (your MLM core data)
       db.ref(`Mainformdata/${timestampKey}`).set({
         uid: userId,
         name: name.trim(),
         email: emailLower,
         mobile: mobile?.trim() || '',
-        selectedCity: selectedCity || 'Not selected',
+        selectedCity: selectedCity || '',
         profession: profession || '',
-        income: income || 'Not selected',
-        household: household || 'Not selected',
+        income: income || '',
+        household: household || '',
         why: why?.trim() || '',
         referredBy: referredBy || '',
-        referralId: referralId || '',
-        referrals: {}, // Future referral tracking
         createdAt: Date.now()
       }),
 
-      // Users collection (Clerk sync)
+      // ✅ MATCH YOUR LIVE FORMAT:
       db.ref(`users/${userId}`).set({
         firstname: firstName,
         lastname: lastName,
         email: emailLower,
         mobile: mobile?.trim() || '',
-        referredBy: referredBy || '',
         createdAt: Date.now()
       })
     ]);
+
 
     // 7. MLM REFERRAL CHAIN (Production Ready) ✅
     if (referredBy && referralId) {
