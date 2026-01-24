@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/form/signup.js": {
+      "maxDuration": 30
+    }
+  }
+}
