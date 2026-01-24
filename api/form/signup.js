@@ -23,12 +23,16 @@ export default async function handler(req, res) {
     } = req.body;
 
     // 1. RATE LIMITING (1/min per IP)
-    const rateKey = `rate:${ip}:${Math.floor(startTime / 60000)}`;
-    const rateCheck = await db.ref(rateKey).once('value');
-    if (rateCheck.val() >= 2) {
-      return res.status(429).json({ error: 'Too many requests' });
-    }
-    await db.ref(rateKey).transaction(current => (current || 0) + 1);
+
+const cleanIp = ip.replace(/\./g, '_').replace(/:/g, '_');  // dots → underscores
+const minuteBucket = Math.floor(startTime / 60000);
+const rateKey = `rate/${cleanIp}/${minuteBucket}`;
+const rateCheck = await db.ref(rateKey).once('value');
+if (rateCheck.val() >= 2) {
+  return res.status(429).json({ error: 'Too many requests' });
+}
+await db.ref(rateKey).transaction(current => (current || 0) + 1);
+
 
     // 2. CAPTCHA VALIDATION
     const captchaRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
