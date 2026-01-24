@@ -1,4 +1,7 @@
-import { initializeApp, cert } from 'firebase-admin/app';
+
+
+
+    import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 import { createClerkClient } from '@clerk/backend';
 
@@ -9,7 +12,6 @@ const app = initializeApp({
 });
 const db = getDatabase(app);
 
-// ✅ EXACTLY LIKE YOUR WORKING upload-sessions CODE
 const clerkClient = createClerkClient({
   secretKey: process.env.CLERK_SECRET_KEY,
 });
@@ -36,6 +38,7 @@ export default async function handler(req, res) {
     }
     await db.ref(rateKey).transaction(current => (current || 0) + 1);
 
+
     // 2. CAPTCHA VALIDATION (disabled for testing - UNCOMMENT FOR PRODUCTION)
     /*
     const captchaRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
@@ -48,6 +51,8 @@ export default async function handler(req, res) {
     */
 
     // 3. VALIDATION & SANITIZATION ✅
+
+    // 2. VALIDATION & SANITIZATION ✅
     if (!name || !email) {
       return res.status(400).json({ error: 'Name and email required' });
     }
@@ -57,63 +62,72 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Invalid email format' });
     }
 
-    // 4. EMAIL DEDUPLICATION ✅
-    const emailCheck = await db.ref('users').orderByChild('email').equalTo(emailLower).once('value');
-    if (emailCheck.exists()) {
-      return res.status(400).json({ error: 'Email already registered' });
-    }
+    // 🔥 3. DUAL VALIDATION: CLERK FIRST + FIREBASE SECOND ✅
+    console.log('🔍 Checking dual validation for:', emailLower);
 
-    // 5. CLERK USER CREATION (YOUR WORKING PATTERN) ✅
-    const nameParts = name.trim().split(' ');
-    const firstName = nameParts[0];
-    const lastName = nameParts.slice(1).join(' ') || '';
-    // ✅ USERNAME GENERATION (Required field fixed!)
-    const username = `${firstName.toLowerCase()}${Math.floor(Math.random() * 10000)}`;
-    let user;
+    // CLERK CHECK (SINGLE CALL - NO DUPLICATES!)
+    let clerkUserExists = false;
     try {
-      // Check existing user (EXACTLY like upload-sessions)
       const userListResponse = await clerkClient.users.getUserList({
         emailAddress: [emailLower],
         limit: 1,
       });
-
-      user = userListResponse.data.length ? userListResponse.data[0] : null;
-
-      // Create new user if not exists
-      if (!user) {
-        user = await clerkClient.users.createUser({
-          emailAddress: [emailLower],
-          username: username,  // ✅ REQUIRED FIELD!
-          firstName,
-          lastName,
-          skipPasswordRequirement: true,
-          skipPasswordChecks: true,
-          unsafeMetadata: {
-            mobile: mobile?.trim() || '',
-            selectedCity: selectedCity || 'Not selected',
-            profession: profession || '',
-            income: income || 'Not selected',
-            household: household || 'Not selected',
-            why: why?.trim() || '',
-            createdAt: Date.now()
-          }
-        });
-        console.log('✅ New Clerk user created:', user.id);
-      } else {
-        console.log('✅ Existing Clerk user found:', user.id);
+      if (userListResponse.data.length > 0) {
+        console.log('❌ User exists in Clerk:', userListResponse.data[0].id);
+        clerkUserExists = true;
       }
     } catch (clerkError) {
-      console.error('❌ Clerk Error:', clerkError.errors || clerkError.message);
-      // GRACEFUL FALLBACK - Firebase still works
-      user = { id: `fallback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}` };
-      console.log('✅ Using fallback userId:', user.id);
+      console.error('Clerk check failed:', clerkError.message);
     }
 
-    const userId = user.id;
+    if (clerkUserExists) {
+      return res.status(400).json({ error: 'User already registered with this email' });
+    }
+
+    // FIREBASE CHECK
+    const emailCheck = await db.ref('users').orderByChild('email').equalTo(emailLower).once('value');
+    if (emailCheck.exists()) {
+      console.log('❌ User exists in Firebase');
+      return res.status(400).json({ error: 'User already registered with this email' });
+    }
+
+    // 4. CREATE NEW USER (We KNOW user doesn't exist!) ✅
+    const nameParts = name.trim().split(' ');
+    const firstName = nameParts[0];
+    const lastName = nameParts.slice(1).join(' ') || '';
+    const username = `${firstName.toLowerCase()}${Math.floor(Math.random() * 10000)}`;
+
+    let userId;
+    try {
+      // ✅ NO DUPLICATE getUserList() - Direct creation!
+      const user = await clerkClient.users.createUser({
+        emailAddress: [emailLower],
+        username: username,
+        firstName,
+        lastName,
+        skipPasswordRequirement: true,
+        skipPasswordChecks: true,
+        unsafeMetadata: {
+          mobile: mobile?.trim() || '',
+          selectedCity: selectedCity || 'Not selected',
+          profession: profession || '',
+          income: income || 'Not selected',
+          household: household || 'Not selected',
+          why: why?.trim() || '',
+          createdAt: Date.now()
+        }
+      });
+      userId = user.id;
+      console.log('✅ New Clerk user created:', userId);
+    } catch (clerkError) {
+      console.error('❌ Clerk creation failed:', clerkError.errors || clerkError.message);
+      userId = `fallback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      console.log('✅ Using fallback userId:', userId);
+    }
+
     const timestampKey = Date.now().toString();
 
-    // 6. FIREBASE WRITES (MLM STRUCTURE) ✅
-    // Replace Firebase writes section (lines 120-150):
+    // 5. FIREBASE WRITES ✅
     await Promise.all([
       db.ref(`Mainformdata/${timestampKey}`).set({
         uid: userId,
@@ -128,8 +142,6 @@ export default async function handler(req, res) {
         referredBy: referredBy || '',
         createdAt: Date.now()
       }),
-
-      // ✅ MATCH YOUR LIVE FORMAT:
       db.ref(`users/${userId}`).set({
         firstname: firstName,
         lastname: lastName,
@@ -139,15 +151,11 @@ export default async function handler(req, res) {
       })
     ]);
 
-
-    // 7. MLM REFERRAL CHAIN (Production Ready) ✅
+    // 6. MLM REFERRAL CHAIN ✅
     if (referredBy && referralId) {
       try {
         const referrerSnap = await db.ref(`users/${referredBy}`).once('value');
         if (referrerSnap.exists()) {
-          const referrerDetails = referrerSnap.val();
-
-          // Update referrer's Mainformdata referrals
           const referrerFormSnap = await db.ref('Mainformdata')
             .orderByChild('uid').equalTo(referredBy).once('value');
 
@@ -161,7 +169,6 @@ export default async function handler(req, res) {
               completedAt: Date.now()
             });
           });
-
           console.log('✅ Referral chain updated');
         }
       } catch (referralError) {
@@ -169,7 +176,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 8. GOOGLE SHEETS AUDIT LOG ✅
+    // 7. GOOGLE SHEETS AUDIT LOG ✅
     if (process.env.GOOGLE_SHEETS_URL) {
       const sheetsData = {
         formType: "formmodal",
@@ -188,7 +195,6 @@ export default async function handler(req, res) {
         clerkUserId: userId,
         status: 'success'
       };
-
       fetch(process.env.GOOGLE_SHEETS_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -208,7 +214,6 @@ export default async function handler(req, res) {
   } catch (error) {
     console.error('💥 CRITICAL ERROR:', error);
 
-    // Audit log on failure
     if (process.env.GOOGLE_SHEETS_URL) {
       fetch(process.env.GOOGLE_SHEETS_URL, {
         method: 'POST',
