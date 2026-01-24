@@ -1,6 +1,4 @@
-
-
-
+import formidable from 'formidable';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 import { createClerkClient } from '@clerk/backend';
@@ -17,18 +15,33 @@ const clerkClient = createClerkClient({
 });
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   const startTime = Date.now();
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
   try {
+    // 🔥 FIX 1: Parse FormData PROPERLY
+    const form = formidable({ multiples: false });
+    const [fields] = await form.parse(req);
+
+    // Convert to plain object
+    const body = {};
+    for (const key of Object.keys(fields)) {
+      body[key] = fields[key][0] || fields[key];
+    }
+
+    // 🔥 FIX 2: Use `body` not `req.body`
     const {
       name, email, mobile, selectedCity, profession, income, household, why,
       captchaToken, referredBy, referralId
-    } = req.body;
+    } = body;
 
-    // 1. RATE LIMITING (2/min per IP) ✅
+    console.log('📥 Received form data:', { name, email, captchaToken: captchaToken ? '✓' : '✗' });
+
+    // 1. RATE LIMITING
     const cleanIp = ip.replace(/\./g, '_').replace(/:/g, '_');
     const minuteBucket = Math.floor(startTime / 60000);
     const rateKey = `rate/${cleanIp}/${minuteBucket}`;
@@ -38,21 +51,20 @@ export default async function handler(req, res) {
     }
     await db.ref(rateKey).transaction(current => (current || 0) + 1);
 
+    // 2. CAPTCHA VALIDATION
+    if (captchaToken) {
+      const captchaRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `secret=${process.env.TURNSTILE_SECRET_KEY}&response=${captchaToken}&remoteip=${ip}`
+      });
+      const captchaData = await captchaRes.json();
+      if (!captchaData.success) {
+        return res.status(400).json({ error: 'Invalid CAPTCHA' });
+      }
+    }
 
-    // 2. CAPTCHA VALIDATION (disabled for testing - UNCOMMENT FOR PRODUCTION)
-
-    const captchaRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `secret=${process.env.TURNSTILE_SECRET_KEY}&response=${captchaToken}&remoteip=${ip}`
-    });
-    const captchaData = await captchaRes.json();
-    if (!captchaData.success) return res.status(400).json({ error: 'Invalid CAPTCHA' });
-
-
-    // 3. VALIDATION & SANITIZATION ✅
-
-    // 2. VALIDATION & SANITIZATION ✅
+    // 3. VALIDATION
     if (!name || !email) {
       return res.status(400).json({ error: 'Name and email required' });
     }
@@ -62,10 +74,10 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Invalid email format' });
     }
 
-    // 🔥 3. DUAL VALIDATION: CLERK FIRST + FIREBASE SECOND ✅
+    // 4. DUAL VALIDATION: CLERK + FIREBASE
     console.log('🔍 Checking dual validation for:', emailLower);
 
-    // CLERK CHECK (SINGLE CALL - NO DUPLICATES!)
+    // CLERK CHECK
     let clerkUserExists = false;
     try {
       const userListResponse = await clerkClient.users.getUserList({
@@ -91,7 +103,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'User already registered with this email' });
     }
 
-    // 4. CREATE NEW USER (We KNOW user doesn't exist!) ✅
+    // 5. CREATE USER
     const nameParts = name.trim().split(' ');
     const firstName = nameParts[0];
     const lastName = nameParts.slice(1).join(' ') || '';
@@ -99,7 +111,6 @@ export default async function handler(req, res) {
 
     let userId;
     try {
-      // ✅ NO DUPLICATE getUserList() - Direct creation!
       const user = await clerkClient.users.createUser({
         emailAddress: [emailLower],
         username: username,
@@ -122,12 +133,11 @@ export default async function handler(req, res) {
     } catch (clerkError) {
       console.error('❌ Clerk creation failed:', clerkError.errors || clerkError.message);
       userId = `fallback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      console.log('✅ Using fallback userId:', userId);
     }
 
     const timestampKey = Date.now().toString();
 
-    // 5. FIREBASE WRITES ✅
+    // 6. FIREBASE WRITES
     await Promise.all([
       db.ref(`Mainformdata/${timestampKey}`).set({
         uid: userId,
@@ -151,7 +161,7 @@ export default async function handler(req, res) {
       })
     ]);
 
-    // 6. MLM REFERRAL CHAIN ✅
+    // 7. MLM REFERRAL CHAIN (unchanged)
     if (referredBy && referralId) {
       try {
         const referrerSnap = await db.ref(`users/${referredBy}`).once('value');
@@ -176,7 +186,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 7. GOOGLE SHEETS AUDIT LOG ✅
+    // 8. GOOGLE SHEETS (unchanged)
     if (process.env.GOOGLE_SHEETS_URL) {
       const sheetsData = {
         formType: "formmodal",
