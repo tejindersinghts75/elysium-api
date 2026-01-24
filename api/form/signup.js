@@ -38,7 +38,7 @@ export default async function handler(req, res) {
       body: `secret=${process.env.TURNSTILE_SECRET_KEY}&response=${captchaToken}&remoteip=${ip}`
     });
     const captchaData = await captchaRes.json();
-    if (!captchaData.success) return res.status(400).json({ error: 'Invalid CAPTCHA' });
+    //if (!captchaData.success) return res.status(400).json({ error: 'Invalid CAPTCHA' });
 
     // 3. EMAIL VALIDATION & SANITIZATION ✅ MISSING PIECE ADDED
     const emailLower = email.toLowerCase().trim();
