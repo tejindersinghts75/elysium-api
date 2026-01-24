@@ -231,16 +231,18 @@ export default async function handler(req, res) {
     console.log(`✅ FULL SUCCESS: ${userId} (${ip}) in ${Date.now() - startTime}ms`);
 
     // 🔥 AUTO-LOGIN TOKEN (NEW - ADD THESE 3 LINES)
-const signInToken = await clerkClient.signInTokens.createSignInToken(userId);
-console.log('🔑 Auto-login token generated');
+    // 🔥 AUTO-LOGIN TOKEN (PERMANENT)
+    const { token } = await clerkClient.signInTokens.createSignInToken({ userId });
+    console.log('🔑 Permanent auto-login token generated');
 
-res.json({
-  success: true,
-  userId,
-  clerkSignInToken: signInToken.token,  // ← NEW
-  redirect: '/thank-you',
-  message: 'Welcome to Elysium! 🎉'
-});
+    res.json({
+      success: true,
+      userId,
+      clerkSignInToken: token,
+      redirect: '/thank-you',
+      message: 'Welcome to Elysium! 🎉'
+    });
+
 
   } catch (error) {
     console.error('💥 CRITICAL ERROR:', error);
