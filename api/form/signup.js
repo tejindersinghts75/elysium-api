@@ -230,12 +230,17 @@ export default async function handler(req, res) {
 
     console.log(`✅ FULL SUCCESS: ${userId} (${ip}) in ${Date.now() - startTime}ms`);
 
-    res.json({
-      success: true,
-      userId,
-      redirect: '/thank-you',
-      message: 'Welcome to Elysium! 🎉'
-    });
+    // 🔥 AUTO-LOGIN TOKEN (NEW - ADD THESE 3 LINES)
+const signInToken = await clerkClient.generateSignInToken(userId);
+console.log('🔑 Auto-login token generated');
+
+res.json({
+  success: true,
+  userId,
+  clerkSignInToken: signInToken.token,  // ← NEW
+  redirect: '/thank-you',
+  message: 'Welcome to Elysium! 🎉'
+});
 
   } catch (error) {
     console.error('💥 CRITICAL ERROR:', error);
