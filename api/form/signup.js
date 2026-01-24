@@ -67,7 +67,8 @@ export default async function handler(req, res) {
     const nameParts = name.trim().split(' ');
     const firstName = nameParts[0];
     const lastName = nameParts.slice(1).join(' ') || '';
-
+ // ✅ USERNAME GENERATION (Required field fixed!)
+    const username = `${firstName.toLowerCase()}${Math.floor(Math.random() * 10000)}`;
     let user;
     try {
       // Check existing user (EXACTLY like upload-sessions)
@@ -82,6 +83,7 @@ export default async function handler(req, res) {
       if (!user) {
         user = await clerkClient.users.createUser({
           emailAddress: [emailLower],
+           username: username,  // ✅ REQUIRED FIELD!
           firstName,
           lastName,
           skipPasswordRequirement: true,
