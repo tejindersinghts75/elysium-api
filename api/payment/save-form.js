@@ -1,4 +1,3 @@
-import formidable from 'formidable';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 
@@ -10,7 +9,6 @@ const app = initializeApp({
 const db = getDatabase(app);
 
 export default async function handler(req, res) {
-  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -25,16 +23,23 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Parse form data
-    const form = formidable({ multiples: false });
-    const [fields] = await form.parse(req);
-    const body = {};
+    // 🔥 FIXED: PURE JSON PARSING - NO FORMIDABLE
+    const body = await new Promise((resolve, reject) => {
+      let data = '';
+      req.on('data', (chunk) => {
+        data += chunk;
+      });
+      req.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(new Error('Invalid JSON'));
+        }
+      });
+      req.on('error', reject);
+    });
 
-    for (const key of Object.keys(fields)) {
-      body[key] = fields[key][0] || fields[key];
-    }
-
-    console.log('📥 Received data:', body);
+    console.log('📥 FULL DATA RECEIVED:', body);
 
     const {
       clerkUserId,
@@ -46,18 +51,15 @@ export default async function handler(req, res) {
       diningpackage
     } = body;
 
-    // Validate required fields
+    // Validate
     if (!clerkUserId || !useremail) {
-      console.log('❌ Missing required fields');
-      return res.status(400).json({
-        error: 'Missing user ID or email',
-        received: { clerkUserId: !!clerkUserId, useremail: !!useremail }
-      });
+      console.log('❌ Missing fields:', { clerkUserId: !!clerkUserId, useremail: !!useremail });
+      return res.status(400).json({ error: 'Missing user ID or email' });
     }
 
-    // 🔥 FULL DEBUG LOGGING
-    console.log('🔍 Searching for clerkUserId:', clerkUserId);
+    console.log('🔍 clerkUserId FULL:', clerkUserId, 'Length:', clerkUserId.length);
 
+    // Query Firebase
     const mainformdataRef = db.ref('Mainformdata');
     const snapshot = await mainformdataRef
       .orderByChild('uid')
@@ -66,29 +68,25 @@ export default async function handler(req, res) {
 
     console.log('📊 Query result:', {
       exists: snapshot.exists(),
-      numChildren: snapshot.numChildren(),
-      rawData: snapshot.val()
+      numChildren: snapshot.numChildren()
     });
 
     if (!snapshot.exists()) {
-      // DEBUG: Log ALL Mainformdata
       const allData = await mainformdataRef.once('value');
       const allKeys = allData.val() ? Object.keys(allData.val()) : [];
-      console.log('📋 ALL Mainformdata keys:', allKeys);
-
       return res.status(404).json({
-        error: 'User form data not found in Mainformdata',
+        error: 'User form data not found',
         debug: {
           clerkUserId,
+          clerkUserIdLength: clerkUserId.length,
           snapshotExists: snapshot.exists(),
-          snapshotNumChildren: snapshot.numChildren(),
-          allMainformdataKeys: allKeys.slice(0, 5), // First 5 keys
-          totalRecords: allKeys.length
+          totalRecords: allKeys.length,
+          allMainformdataKeys: allKeys.slice(0, 5)
         }
       });
     }
 
-    // Get the entry key
+    // Get entry key
     let entryKey = null;
     snapshot.forEach((child) => {
       entryKey = child.key;
@@ -96,12 +94,12 @@ export default async function handler(req, res) {
 
     console.log('✅ Found entry key:', entryKey);
 
-    // Parse unit data safely
+    // Parse unit safely
     let parsedUnit = [];
     try {
       parsedUnit = unit ? JSON.parse(unit) : [];
     } catch (e) {
-      console.warn('⚠️ Unit parsing failed, using empty array:', e.message);
+      console.warn('⚠️ Unit parsing failed:', e.message);
       parsedUnit = [];
     }
 
@@ -113,27 +111,21 @@ export default async function handler(req, res) {
       chooseterm: chooseterm || '',
       selectapplication: selectapplication || '',
       diningpackage: diningpackage || '',
-      submittedAt: Date.now(),
-      totalPrice: body.totalPrice || 0
+      submittedAt: Date.now()
     };
 
     await db.ref(`Mainformdata/${entryKey}/PaymentFormData`).set(paymentData);
 
-    console.log('💾 PaymentFormData saved successfully:', entryKey);
+    console.log('💾 SAVED to:', entryKey);
 
     res.json({
       success: true,
       message: 'Payment form saved successfully',
-      entryKey,
-      paymentDataKeys: Object.keys(paymentData)
+      entryKey
     });
 
   } catch (error) {
-    console.error('💥 Full error:', error);
-    res.status(500).json({
-      error: 'Server error',
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
+    console.error('💥 ERROR:', error);
+    res.status(500).json({ error: 'Server error', details: error.message });
   }
 }
