@@ -160,7 +160,20 @@ async function parseBody(req) {
 
 // NEW: Track referral opens
 async function handleTrackReferral(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
+   // ✅ ALL CORS HEADERS FIRST (before any return)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'POST required' });
+    return;
+  }
 
   try {
     const body = await parseBody(req);
@@ -194,8 +207,20 @@ async function handleTrackReferral(req, res) {
 
 // NEW: Track successful signups
 async function handleSignup(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
+  // ✅ ALL CORS HEADERS FIRST
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'POST required' });
+    return;
+  }
   try {
     const body = await parseBody(req);
     const { newUserId, email, referralId, referredBy } = body;
