@@ -139,6 +139,7 @@ const username = `${firstName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Mat
         firstName,
         lastName,
         password: randomPassword,
+        skipEmailVerification: true,  // ✅ CRITICAL - Add this
         // skipPasswordChecks: true,
         unsafeMetadata: {
           mobile: mobile?.trim() || '',
