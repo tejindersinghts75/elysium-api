@@ -232,15 +232,14 @@ export default async function handler(req, res) {
 
     // 🔥 AUTO-LOGIN TOKEN (NEW - ADD THESE 3 LINES)
     // 🔥 AUTO-LOGIN TOKEN (PERMANENT)
-    const { token } = await clerkClient.signInTokens.createSignInToken({ userId });
-    console.log('🔑 Permanent auto-login token generated');
-
+    //const { token } = await clerkClient.signInTokens.createSignInToken({ userId });
+    //console.log('🔑 Permanent auto-login token generated');
+    const frontendToken = await clerkClient.generateSignInToken(userId);
     res.json({
       success: true,
       userId,
-      clerkSignInToken: token,
-      redirect: '/thank-you',
-      message: 'Welcome to Elysium! 🎉'
+      clerkSignInToken: frontendToken.value,  // Note: .value property
+      redirect: '/thank-you'
     });
 
 
