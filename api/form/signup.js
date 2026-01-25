@@ -132,7 +132,7 @@ const username = `${firstName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Mat
 
 
     try {
-      const randomPassword = `auto_${Math.random().toString(36).slice(-8)}`;
+      randomPassword = `auto_${Math.random().toString(36).slice(-8)}`;
       const user = await clerkClient.users.createUser({
         emailAddress: [emailLower],
         username: username,
