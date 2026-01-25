@@ -2,10 +2,8 @@ import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-const app = initializeApp({
-  credential: cert(serviceAccount),
-  databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/"
-});
+const app = initializeApp({ credential: cert(serviceAccount),
+    databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/" });
 const db = getDatabase(app);
 
 export default async function handler(req, res) {
@@ -13,118 +11,135 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') { res.status(200).end(); return; }
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
+  const { action } = req.query;
 
   try {
-    const { action } = req.query;
-
     switch (action) {
-      case 'generate-link': return handleGenerateLink(req, res);
-      case 'submit-form': return handleSubmitForm(req, res);
-      case 'send-email': return handleSendEmail(req, res);
-      default: res.status(400).json({ error: 'Invalid action' });
+      case 'generate-link': return await handleGenerateLink(req, res);
+      case 'submit-form': return await handleSubmitForm(req, res);
+      case 'send-email': return await handleSendEmail(req, res);
+      default: return res.status(400).json({ error: 'Invalid action', available: ['generate-link', 'submit-form', 'send-email'] });
     }
   } catch (error) {
     console.error('Referral API error:', error);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ error: 'Internal server error', details: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 }
 
-// Generate referral link
 async function handleGenerateLink(req, res) {
-  try {
-    const { clerkUserId } = req.query;
-    if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
+  const { clerkUserId } = req.query;
+  if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
 
-    const uniqueId = Date.now().toString();
-    const referralLink = `https://elysiumcommunities.com/referralpost?userId=${clerkUserId}&uniqueId=${uniqueId}`;
+  const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const referralLink = `https://elysiumcommunities.com/referralpost?userId=${clerkUserId}&uniqueId=${uniqueId}`;
 
-    res.json({
-      success: true,
-      referralLink,
-      uniqueId
-    });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to generate link' });
-  }
+  res.json({
+    success: true,
+    referralLink,
+    uniqueId,
+    timestamp: Date.now()
+  });
 }
 
-// Submit referral form (replaces Firebase direct write)
 async function handleSubmitForm(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
 
   try {
     const body = await parseBody(req);
-    const { clerkUserId, referredEmails } = body;
+    const { clerkUserId, referredEmails = [] } = body;
 
-    if (!clerkUserId || !referredEmails?.length) {
-      return res.status(400).json({ error: 'Missing data' });
+    if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
+    if (!Array.isArray(referredEmails) || referredEmails.length === 0) {
+      return res.status(400).json({ error: 'No valid emails provided' });
     }
 
-    // Find Mainformdata entry
     const mainformRef = db.ref('Mainformdata');
     const snapshot = await mainformRef.orderByChild('uid').equalTo(clerkUserId).once('value');
 
-    if (!snapshot.exists()) {
-      return res.status(404).json({ error: 'User entry not found' });
-    }
+    if (!snapshot.exists()) return res.status(404).json({ error: 'User referral data not found' });
 
-    // Update referrals
-    let updated = false;
+    let updatedCount = 0;
     snapshot.forEach((child) => {
       const entryKey = child.key;
       const updates = {};
-      referredEmails.forEach((email, index) => {
-        updates[`referral${index + 1}`] = email;
+      referredEmails.slice(0, 10).forEach((email, index) => {
+        if (email && isValidEmail(email)) {
+          updates[`referral${index + 1}`] = email;
+        }
       });
-      db.ref(`Mainformdata/${entryKey}`).update(updates);
-      updated = true;
+
+      if (Object.keys(updates).length > 0) {
+        db.ref(`Mainformdata/${entryKey}`).update({
+          ...updates,
+          referralsUpdatedAt: Date.now()
+        });
+        updatedCount++;
+      }
     });
 
-    res.json({ success: true, message: 'Referrals saved' });
+    res.json({
+      success: true,
+      message: `Saved ${updatedCount} referral entries`,
+      emailsProcessed: referredEmails.length
+    });
   } catch (error) {
     console.error('Submit form error:', error);
     res.status(500).json({ error: 'Failed to save referrals' });
   }
 }
 
-// Send referral email (Brevo API - secure)
 async function handleSendEmail(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
 
   try {
     const body = await parseBody(req);
     const { email, referralLink } = body;
 
-    if (!email || !referralLink) {
-      return res.status(400).json({ error: 'Missing email or link' });
+    if (!email || !isValidEmail(email)) return res.status(400).json({ error: 'Invalid email' });
+    if (!referralLink || !referralLink.startsWith('https://elysiumcommunities.com')) {
+      return res.status(400).json({ error: 'Invalid referral link' });
     }
 
-    // Call Brevo API (API key in ENV)
     const response = await fetch("https://api.brevo.com/v3/smtp/email", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Accept": "application/json",
-        "api-key": process.env.BREVO_API_KEY // ✅ SECURE
+        "api-key": process.env.BREVO_API_KEY
       },
       body: JSON.stringify({
         sender: { email: "eahto@kypsi.com", name: "Kypsi" },
-        to: [{ email, name: "Referral User" }],
-        subject: "You've Been Referred!",
-        htmlContent: `<p>Hello,</p><p>Your friend referred you! Click the link below:</p><a href="${referralLink}">${referralLink}</a>`
+        to: [{ email, name: "Friend" }],
+        subject: "You've Been Referred to Elysium Communities!",
+        htmlContent: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #178a00;">🎉 You've been referred!</h2>
+            <p>Hello,</p>
+            <p>A friend thought you'd love <strong>Elysium Communities</strong>! Check it out:</p>
+            <a href="${referralLink}" style="background: #178a00; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Join Now</a>
+            <p style="margin-top: 20px; font-size: 12px; color: #666;">
+              ${referralLink}
+            </p>
+          </div>
+        `
       })
     });
 
-    if (response.ok) {
-      res.json({ success: true, message: `Email sent to ${email}` });
-    } else {
-      res.status(500).json({ error: 'Failed to send email' });
-    }
+    const result = await response.json();
+    res.json({
+      success: response.ok,
+      message: response.ok ? `Email sent to ${email}` : 'Email failed',
+      details: response.ok ? null : result
+    });
   } catch (error) {
     console.error('Send email error:', error);
-    res.status(500).json({ error: 'Email service error' });
+    res.status(500).json({ error: 'Email service unavailable' });
   }
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 async function parseBody(req) {
@@ -133,7 +148,8 @@ async function parseBody(req) {
     req.on('data', chunk => data += chunk);
     req.on('end', () => {
       try { resolve(JSON.parse(data)); }
-      catch (e) { reject(new Error('Invalid JSON')); }
+      catch { resolve({}); }
     });
+    req.on('error', reject);
   });
 }
