@@ -242,7 +242,7 @@ const username = `${firstName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Mat
       email: emailLower,
       tempPassword: randomPassword,
       firstName,
-      redirect: '/dashboard'
+      redirect: '/thank-you'
     });
 
 
