@@ -24,18 +24,17 @@ export default async function handler(req, res) {
       body[key] = fields[key][0] || fields[key];
     }
 
-    const { clerkUserId, useremail, unit, teslaoptions, chooseterm, selectapplication, diningpackage } = body;
+    const { clerkUserId, useremail } = body;
 
+    // BACKEND: Trust frontend userId (no Clerk API call)
     if (!clerkUserId || !useremail) {
-      return res.status(400).json({ error: 'Missing user data' });
+      return res.status(400).json({ error: 'Missing user ID or email' });
     }
 
-    // Validate Clerk user
-    await clerkClient.users.getUser(clerkUserId);
-
-    // Find user's Mainformdata entry
+    // BACKEND: Query Firebase like frontend does
     const mainformdataRef = db.ref('Mainformdata');
     const snapshot = await mainformdataRef.orderByChild('uid').equalTo(clerkUserId).once('value');
+
     if (!snapshot.exists()) {
       return res.status(404).json({ error: 'User form data not found' });
     }
@@ -45,14 +44,14 @@ export default async function handler(req, res) {
       entryKey = child.key;
     });
 
-    // Save PaymentFormData
+    // BACKEND: Save exactly like frontend
     await db.ref(`Mainformdata/${entryKey}/PaymentFormData`).set({
       useremail,
-      unit: unit ? JSON.parse(unit) : [],
-      teslaoptions: teslaoptions || '',
-      chooseterm: chooseterm || '',
-      selectapplication: selectapplication || '',
-      diningpackage: diningpackage || '',
+      unit: body.unit ? JSON.parse(body.unit) : [],
+      teslaoptions: body.teslaoptions || '',
+      chooseterm: body.chooseterm || '',
+      selectapplication: body.selectapplication || '',
+      diningpackage: body.diningpackage || '',
       submittedAt: Date.now()
     });
 
