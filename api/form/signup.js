@@ -86,9 +86,9 @@ export default async function handler(req, res) {
     }
 
     const emailLower = email.toLowerCase().trim();
-    if (!emailLower.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)) {
-      return res.status(400).json({ error: 'Invalid email format' });
-    }
+  if (!emailLower.match(/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/)) {
+  return res.status(400).json({ error: 'Invalid email format' });
+}
 
     // 4. DUAL VALIDATION: CLERK + FIREBASE
     console.log('🔍 Checking dual validation for:', emailLower);
@@ -119,13 +119,18 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'User already registered with this email' });
     }
 
-    // 5. CREATE USER
-    const nameParts = name.trim().split(' ');
-    const firstName = nameParts[0];
-    const lastName = nameParts.slice(1).join(' ') || '';
-    const username = `${firstName.toLowerCase()}${Math.floor(Math.random() * 10000)}`;
+// ✅ SANITIZE NAME FOR USERNAME
+const cleanName = name.trim().replace(/[^a-zA-Z\s]/g, '');
+const firstName = cleanName.split(' ')[0] || 'User';
+const lastName = cleanName.split(' ').slice(1).join(' ') || '';
+const username = `${firstName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`;
 
-    let userId;
+
+    // ✅ DECLARE OUTSIDE TRY BLOCK
+    let userId
+    let randomPassword = null;
+
+
     try {
       const randomPassword = `auto_${Math.random().toString(36).slice(-8)}`;
       const user = await clerkClient.users.createUser({
