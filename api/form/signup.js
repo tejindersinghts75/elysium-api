@@ -230,17 +230,16 @@ export default async function handler(req, res) {
 
     console.log(`✅ FULL SUCCESS: ${userId} (${ip}) in ${Date.now() - startTime}ms`);
 
-    // 🔥 AUTO-LOGIN TOKEN (NEW - ADD THESE 3 LINES)
-    // 🔥 AUTO-LOGIN TOKEN (PERMANENT)
-    //const { token } = await clerkClient.signInTokens.createSignInToken({ userId });
-    //console.log('🔑 Permanent auto-login token generated');
-    const frontendToken = await clerkClient.generateSignInToken(userId);
-    res.json({
-      success: true,
-      userId,
-      clerkSignInToken: frontendToken.value,  // Note: .value property
-      redirect: '/thank-you'
-    });
+    /// ✅ CORRECT: Use ORIGINAL method but fix frontend handling
+const { token } = await clerkClient.signInTokens.createSignInToken({ userId });
+console.log('🔑 Sign-in token generated for auto-login');
+
+res.json({
+  success: true,
+  userId,
+  clerkSignInToken: token,  // Direct token, no .value
+  redirect: '/thank-you'
+});
 
 
   } catch (error) {
