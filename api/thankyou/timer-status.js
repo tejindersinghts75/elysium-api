@@ -1,13 +1,20 @@
 // api/thankyou/timer-status.js (GET status)
+import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 import { createClerkClient } from '@clerk/backend';
 
-const db = getDatabase();
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+const app = initializeApp({
+  credential: cert(serviceAccount),
+  databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/"
+});
+const db = getDatabase(app);
 const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+   res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');  // ✅ ADDED
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
