@@ -127,13 +127,14 @@ export default async function handler(req, res) {
 
     let userId;
     try {
+      const randomPassword = `auto_${Math.random().toString(36).slice(-8)}`;
       const user = await clerkClient.users.createUser({
         emailAddress: [emailLower],
         username: username,
         firstName,
         lastName,
-        skipPasswordRequirement: true,
-        skipPasswordChecks: true,
+        password: randomPassword,
+        // skipPasswordChecks: true,
         unsafeMetadata: {
           mobile: mobile?.trim() || '',
           selectedCity: selectedCity || 'Not selected',
@@ -230,16 +231,15 @@ export default async function handler(req, res) {
 
     console.log(`✅ FULL SUCCESS: ${userId} (${ip}) in ${Date.now() - startTime}ms`);
 
-    /// ✅ CORRECT: Use ORIGINAL method but fix frontend handling
-const { token } = await clerkClient.signInTokens.createSignInToken({ userId });
-console.log('🔑 Sign-in token generated for auto-login');
+    res.json({
+      success: true,
+      userId: userId,
+      email: emailLower,
+      tempPassword: randomPassword,
+      firstName,
+      redirect: '/dashboard'
+    });
 
-res.json({
-  success: true,
-  userId,
-  clerkSignInToken: token,  // Direct token, no .value
-  redirect: '/thank-you'
-});
 
 
   } catch (error) {
