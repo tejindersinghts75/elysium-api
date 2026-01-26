@@ -86,9 +86,9 @@ export default async function handler(req, res) {
     }
 
     const emailLower = email.toLowerCase().trim();
-  if (!emailLower.match(/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/)) {
-  return res.status(400).json({ error: 'Invalid email format' });
-}
+    if (!emailLower.match(/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
 
     // 4. DUAL VALIDATION: CLERK + FIREBASE
     console.log('🔍 Checking dual validation for:', emailLower);
@@ -119,44 +119,44 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'User already registered with this email' });
     }
 
-// ✅ SANITIZE NAME FOR USERNAME
-const cleanName = name.trim().replace(/[^a-zA-Z\s]/g, '');
-const firstName = cleanName.split(' ')[0] || 'User';
-const lastName = cleanName.split(' ').slice(1).join(' ') || '';
-const username = `${firstName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`;
+    // ✅ SANITIZE NAME FOR USERNAME
+    const cleanName = name.trim().replace(/[^a-zA-Z\s]/g, '');
+    const firstName = cleanName.split(' ')[0] || 'User';
+    const lastName = cleanName.split(' ').slice(1).join(' ') || '';
+    const username = `${firstName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`;
 
 
     // ✅ DECLARE OUTSIDE TRY BLOCK
-    let userId
-    let randomPassword = null;
 
+    const randomPassword = `auto_${Math.random().toString(36).slice(-8)}`;
+    let userId;
+    let clerkSuccess = false;  // 🔑 NEW FLAG
 
     try {
-      randomPassword = `auto_${Math.random().toString(36).slice(-8)}`;
-      const user = await clerkClient.users.createUser({
-        emailAddress: [emailLower],
-        username: username,
-        firstName,
-        lastName,
-        password: randomPassword,
-        skipEmailVerification: true,  // ✅ CRITICAL - Add this
-        // skipPasswordChecks: true,
-        unsafeMetadata: {
-          mobile: mobile?.trim() || '',
-          selectedCity: selectedCity || 'Not selected',
-          profession: profession || '',
-          income: income || 'Not selected',
-          household: household || 'Not selected',
-          why: why?.trim() || '',
-          createdAt: Date.now()
-        }
-      });
-      userId = user.id;
-      console.log('✅ New Clerk user created:', userId);
-    } catch (clerkError) {
-      console.error('❌ Clerk creation failed:', clerkError.errors || clerkError.message);
-      userId = `fallback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const user = await clerkClient.users.createUser({
+    emailAddress: [emailLower],
+    username: username,
+    firstName,
+    lastName,
+    password: randomPassword,
+    skipEmailVerification: true,
+    unsafeMetadata: {
+      mobile: mobile?.trim() || '',
+      selectedCity: selectedCity || 'Not selected',
+      profession: profession || '',
+      income: income || 'Not selected',
+      household: household || 'Not selected',
+      why: why?.trim() || '',
+      createdAt: Date.now()
     }
+  });
+  userId = user.id;
+  clerkSuccess = true;  // ✅ Clerk worked!
+  console.log('✅ Clerk user created:', userId);
+} catch (clerkError) {
+  console.error('❌ Clerk creation FAILED:', clerkError.message);
+  userId = `fallback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
 
     const timestampKey = Date.now().toString();
 
@@ -237,15 +237,29 @@ const username = `${firstName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Mat
 
     console.log(`✅ FULL SUCCESS: ${userId} (${ip}) in ${Date.now() - startTime}ms`);
 
-    res.json({
-      success: true,
-      userId: userId,
-      email: emailLower,
-      tempPassword: randomPassword,
-      firstName,
-      redirect: '/paymentpagetest'
-    });
-
+   // 🔥 4. CRITICAL: ONLY REDIRECT IF CLERK SUCCEEDED
+if (clerkSuccess) {
+  console.log(`✅ FULL SUCCESS with Clerk: ${userId}`);
+  res.json({
+    success: true,
+    userId: userId,
+    email: emailLower,
+    tempPassword: randomPassword,  // ✅ Always valid
+    firstName,
+    redirect: '/paymentpagetest'    // ✅ Only when Clerk works
+  });
+} else {
+  console.log(`⚠️ Clerk failed, partial success: ${userId}`);
+  res.json({
+    success: true,
+    userId: userId,
+    email: emailLower,
+    tempPassword: null,            // ❌ No password = no auto-login
+    firstName,
+    redirect: null,                // ❌ No payment page redirect
+    warning: 'Clerk unavailable, account saved but payment requires login'
+  });
+}
 
 
   } catch (error) {
