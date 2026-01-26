@@ -13,14 +13,7 @@ const clerkClient = createClerkClient({
   apiKey: process.env.CLERK_SECRET_KEY
 });
 
-function generateRandomPassword(length = 12) {
-  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
-  let password = '';
-  for (let i = 0; i < length; i++) {
-    password += characters[Math.floor(Math.random() * characters.length)];
-  }
-  return password;
-}
+
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
