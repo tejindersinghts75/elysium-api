@@ -18,7 +18,7 @@ const app = initializeApp({
 });
 const db = getDatabase(app);
 const clerkClient = createClerkClient({
-  apiKey: process.env.CLERK_SECRET_KEY
+  secretKey: process.env.CLERK_SECRET_KEY
 });
 
 
