@@ -284,73 +284,61 @@ async function handleSignup(req, res) {
 
 
 async function handleEmailSignup(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'POST required' });
-    return;
-  }
+  console.log('🔥 handleEmailSignup START');
 
   try {
+    console.log('📥 Parsing body...');
     const body = await parseBody(req);
-    const { email, captchaToken } = body;
+    console.log('📧 Body:', body);
 
-    // Validation
+    const { email, captchaToken } = body;
+    console.log('🔍 Validating:', { email, hasCaptcha: !!captchaToken });
+
     if (!email || !isValidEmail(email)) {
+      console.log('❌ Invalid email');
       return res.status(400).json({ error: 'Valid email required' });
     }
-    if (!captchaToken) {
-      return res.status(400).json({ error: 'CAPTCHA required' });
-    }
 
-    // 1️⃣ Extract name + generate password
     const firstname = email.split('@')[0].charAt(0).toUpperCase() + email.split('@')[0].slice(1);
     const randomPassword = generateRandomPassword();
+    console.log('👤 Generated:', { firstname, passwordLength: randomPassword.length });
 
-    // 2️⃣ CREATE CLERK USER ✅
+    // Clerk
+    console.log('🔗 Creating Clerk user...');
     const clerkUser = await clerkClient.users.createUser({
       emailAddress: [email],
       username: firstname,
       password: randomPassword,
       skipEmailVerification: true
     });
+    console.log('✅ Clerk OK:', clerkUser.id);
 
-    const clerkUserId = clerkUser.id;
-    console.log("✅ Clerk user created:", clerkUserId);
-
-    // 3️⃣ REALTIME DB users/
-    const userRef = db.ref(`users/${clerkUserId}`);
-    await userRef.set({
-      firstname,
-      email
-    });
-
-    // 4️⃣ VERIFY
-    const snapshot = await userRef.once('value');
-    if (!snapshot.exists()) {
-      throw new Error('Failed to save user profile');
-    }
+    // Firebase
+    console.log('💾 Saving Firebase...');
+    const userRef = db.ref(`users/${clerkUser.id}`);
+    await userRef.set({ firstname, email });
+    console.log('✅ Firebase OK');
 
     res.json({
       success: true,
-      userId: clerkUserId,
-      firstname,
-      email,
-      tempPassword: randomPassword  // Frontend auto-login
+      userId: clerkUser.id,
+      firstname, email,
+      tempPassword: randomPassword
     });
+    console.log('🎉 SUCCESS');
 
   } catch (error) {
+    console.error('💥 EXACT ERROR:', {
+      message: error.message,
+      code: error.code,
+      stack: error.stack?.split('\n')[0]
+    });
+
     if (error.code === 'user_already_exists') {
       return res.status(409).json({ error: 'Email already registered' });
     }
-    res.status(500).json({ error: 'Signup failed' });
+    res.status(500).json({ error: 'Signup failed: ' + error.message });
   }
 }
+
 
