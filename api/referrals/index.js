@@ -1,7 +1,5 @@
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
-const { Clerk } = require('@clerk/clerk-sdk-node');
-const clerk = new Clerk({ apiKey: process.env.CLERK_SECRET_KEY });
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
@@ -26,8 +24,7 @@ export default async function handler(req, res) {
       case 'send-email': return await handleSendEmail(req, res);
       case 'track': return await handleTrackReferral(req, res);     // ← NEW
       case 'signup': return await handleSignup(req, res);
-      case 'email-signup': return await handleEmailSignup(req, res);  // ✅ ADD THIS
-      default: return res.status(400).json({ error: 'Invalid action', available: ['generate-link', 'submit-form', 'send-email', 'track', 'signup', 'email-signup'] });
+      default: return res.status(400).json({ error: 'Invalid action', available: ['generate-link', 'submit-form', 'send-email'] });
     }
   } catch (error) {
     console.error('Referral API error:', error);
@@ -257,84 +254,3 @@ async function handleSignup(req, res) {
 }
 
 
-async function handleEmailSignup(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'POST required' });
-    return;
-  }
-
-  try {
-    const body = await parseBody(req);
-    const { email, captchaToken } = body;  // ❌ Removed referralId, referredBy
-
-    // Validation
-    if (!email || !isValidEmail(email)) {
-      return res.status(400).json({ error: 'Valid email required' });
-    }
-    if (!captchaToken) {
-      return res.status(400).json({ error: 'CAPTCHA required' });
-    }
-
-    // 1️⃣ EXACT original: Extract name + generate password
-    const firstname = email.split('@')[0].charAt(0).toUpperCase() + email.split('@')[0].slice(1);
-    const randomPassword = generateRandomPassword();
-
-    // 2️⃣ CREATE CLERK USER ✅
-    const clerkUser = await clerk.users.createUser({
-      emailAddress: [email],
-      username: firstname,
-      password: randomPassword,
-      skipEmailVerification: true
-    });
-
-    const clerkUserId = clerkUser.id;
-    console.log("✅ Clerk user created:", clerkUserId);
-
-    // 3️⃣ REALTIME DB users/ ✅ (exact original structure)
-    const userRef = db.ref(`users/${clerkUserId}`);
-    await userRef.set({
-      firstname,
-      email
-    });
-
-    // 4️⃣ VERIFY ✅
-    const snapshot = await userRef.once('value');
-    if (!snapshot.exists()) {
-      throw new Error('Failed to save user profile');
-    }
-
-    // ✅ NO REFERRAL TRACKING - CLEAN & SIMPLE
-
-    res.json({
-      success: true,
-      userId: clerkUserId,
-      firstname,
-      email,
-      tempPassword: randomPassword  // Frontend auto-login
-    });
-
-  } catch (error) {
-    if (error.code === 'user_already_exists') {
-      return res.status(409).json({ error: 'Email already registered' });
-    }
-    res.status(500).json({ error: 'Signup failed' });
-  }
-}
-
-function generateRandomPassword(length = 12) {
-  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
-  let password = '';
-  for (let i = 0; i < length; i++) {
-    password += characters[Math.floor(Math.random() * characters.length)];
-  }
-  return password;
-}
