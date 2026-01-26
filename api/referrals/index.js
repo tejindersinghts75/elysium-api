@@ -33,6 +33,15 @@ export default async function handler(req, res) {
 }
 
 async function handleGenerateLink(req, res) {
+  // 🔥 ADD THESE LINES (same as handleEmailSignup)
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
   const { clerkUserId } = req.query;
   if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
 
@@ -252,5 +261,3 @@ async function handleSignup(req, res) {
     res.status(500).json({ error: 'Signup tracking failed' });
   }
 }
-
-
