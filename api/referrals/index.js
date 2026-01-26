@@ -3,120 +3,120 @@ import { getDatabase } from 'firebase-admin/database';
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
-    credential: cert(serviceAccount),
-    databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/"
+  credential: cert(serviceAccount),
+  databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/"
 });
 const db = getDatabase(app);
 
 export default async function handler(req, res) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-    if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
-    const { action } = req.query;
+  const { action } = req.query;
 
-    try {
-        switch (action) {
-            case 'generate-link': return await handleGenerateLink(req, res);
-            case 'submit-form': return await handleSubmitForm(req, res);
-            case 'send-email': return await handleSendEmail(req, res);
-            case 'track': return await handleTrackReferral(req, res);     // ← NEW
-            case 'signup': return await handleSignup(req, res);
-            default: return res.status(400).json({ error: 'Invalid action', available: ['generate-link', 'submit-form', 'send-email'] });
-        }
-    } catch (error) {
-        console.error('Referral API error:', error);
-        res.status(500).json({ error: 'Internal server error', details: process.env.NODE_ENV === 'development' ? error.message : undefined });
+  try {
+    switch (action) {
+      case 'generate-link': return await handleGenerateLink(req, res);
+      case 'submit-form': return await handleSubmitForm(req, res);
+      case 'send-email': return await handleSendEmail(req, res);
+      case 'track': return await handleTrackReferral(req, res);     // ← NEW
+      case 'signup': return await handleSignup(req, res);
+      default: return res.status(400).json({ error: 'Invalid action', available: ['generate-link', 'submit-form', 'send-email'] });
     }
+  } catch (error) {
+    console.error('Referral API error:', error);
+    res.status(500).json({ error: 'Internal server error', details: process.env.NODE_ENV === 'development' ? error.message : undefined });
+  }
 }
 
 async function handleGenerateLink(req, res) {
-    const { clerkUserId } = req.query;
-    if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
+  const { clerkUserId } = req.query;
+  if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
 
-    const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const referralLink = `https://elysiumcommunities.com/referralpost?userId=${clerkUserId}&uniqueId=${uniqueId}`;
+  const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const referralLink = `https://elysiumcommunities.com/referralpost?userId=${clerkUserId}&uniqueId=${uniqueId}`;
 
-    res.json({
-        success: true,
-        referralLink,
-        uniqueId,
-        timestamp: Date.now()
-    });
+  res.json({
+    success: true,
+    referralLink,
+    uniqueId,
+    timestamp: Date.now()
+  });
 }
 
 async function handleSubmitForm(req, res) {
-    if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
 
-    try {
-        const body = await parseBody(req);
-        const { clerkUserId, referredEmails = [] } = body;
+  try {
+    const body = await parseBody(req);
+    const { clerkUserId, referredEmails = [] } = body;
 
-        if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
-        if (!Array.isArray(referredEmails) || referredEmails.length === 0) {
-            return res.status(400).json({ error: 'No valid emails provided' });
-        }
-
-        const mainformRef = db.ref('Mainformdata');
-        const snapshot = await mainformRef.orderByChild('uid').equalTo(clerkUserId).once('value');
-
-        if (!snapshot.exists()) return res.status(404).json({ error: 'User referral data not found' });
-
-        let updatedCount = 0;
-        snapshot.forEach((child) => {
-            const entryKey = child.key;
-            const updates = {};
-            referredEmails.slice(0, 10).forEach((email, index) => {
-                if (email && isValidEmail(email)) {
-                    updates[`referral${index + 1}`] = email;
-                }
-            });
-
-            if (Object.keys(updates).length > 0) {
-                db.ref(`Mainformdata/${entryKey}`).update({
-                    ...updates,
-                    referralsUpdatedAt: Date.now()
-                });
-                updatedCount++;
-            }
-        });
-
-        res.json({
-            success: true,
-            message: `Saved ${updatedCount} referral entries`,
-            emailsProcessed: referredEmails.length
-        });
-    } catch (error) {
-        console.error('Submit form error:', error);
-        res.status(500).json({ error: 'Failed to save referrals' });
+    if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
+    if (!Array.isArray(referredEmails) || referredEmails.length === 0) {
+      return res.status(400).json({ error: 'No valid emails provided' });
     }
+
+    const mainformRef = db.ref('Mainformdata');
+    const snapshot = await mainformRef.orderByChild('uid').equalTo(clerkUserId).once('value');
+
+    if (!snapshot.exists()) return res.status(404).json({ error: 'User referral data not found' });
+
+    let updatedCount = 0;
+    snapshot.forEach((child) => {
+      const entryKey = child.key;
+      const updates = {};
+      referredEmails.slice(0, 10).forEach((email, index) => {
+        if (email && isValidEmail(email)) {
+          updates[`referral${index + 1}`] = email;
+        }
+      });
+
+      if (Object.keys(updates).length > 0) {
+        db.ref(`Mainformdata/${entryKey}`).update({
+          ...updates,
+          referralsUpdatedAt: Date.now()
+        });
+        updatedCount++;
+      }
+    });
+
+    res.json({
+      success: true,
+      message: `Saved ${updatedCount} referral entries`,
+      emailsProcessed: referredEmails.length
+    });
+  } catch (error) {
+    console.error('Submit form error:', error);
+    res.status(500).json({ error: 'Failed to save referrals' });
+  }
 }
 
 async function handleSendEmail(req, res) {
-    if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
+  if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' });
 
-    try {
-        const body = await parseBody(req);
-        const { email, referralLink } = body;
+  try {
+    const body = await parseBody(req);
+    const { email, referralLink } = body;
 
-        if (!email || !isValidEmail(email)) return res.status(400).json({ error: 'Invalid email' });
-        if (!referralLink || !referralLink.startsWith('https://elysiumcommunities.com')) {
-            return res.status(400).json({ error: 'Invalid referral link' });
-        }
+    if (!email || !isValidEmail(email)) return res.status(400).json({ error: 'Invalid email' });
+    if (!referralLink || !referralLink.startsWith('https://elysiumcommunities.com')) {
+      return res.status(400).json({ error: 'Invalid referral link' });
+    }
 
-        const response = await fetch("https://api.brevo.com/v3/smtp/email", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "api-key": process.env.BREVO_API_KEY
-            },
-            body: JSON.stringify({
-                sender: { email: "eahto@kypsi.com", name: "Kypsi" },
-                to: [{ email, name: "Friend" }],
-                subject: "You've Been Referred to Elysium Communities!",
-                htmlContent: `
+    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "api-key": process.env.BREVO_API_KEY
+      },
+      body: JSON.stringify({
+        sender: { email: "eahto@kypsi.com", name: "Kypsi" },
+        to: [{ email, name: "Friend" }],
+        subject: "You've Been Referred to Elysium Communities!",
+        htmlContent: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #178a00;">🎉 You've been referred!</h2>
             <p>Hello,</p>
@@ -127,35 +127,35 @@ async function handleSendEmail(req, res) {
             </p>
           </div>
         `
-            })
-        });
+      })
+    });
 
-        const result = await response.json();
-        res.json({
-            success: response.ok,
-            message: response.ok ? `Email sent to ${email}` : 'Email failed',
-            details: response.ok ? null : result
-        });
-    } catch (error) {
-        console.error('Send email error:', error);
-        res.status(500).json({ error: 'Email service unavailable' });
-    }
+    const result = await response.json();
+    res.json({
+      success: response.ok,
+      message: response.ok ? `Email sent to ${email}` : 'Email failed',
+      details: response.ok ? null : result
+    });
+  } catch (error) {
+    console.error('Send email error:', error);
+    res.status(500).json({ error: 'Email service unavailable' });
+  }
 }
 
 function isValidEmail(email) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 async function parseBody(req) {
-    return new Promise((resolve, reject) => {
-        let data = '';
-        req.on('data', chunk => data += chunk);
-        req.on('end', () => {
-            try { resolve(JSON.parse(data)); }
-            catch { resolve({}); }
-        });
-        req.on('error', reject);
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', chunk => data += chunk);
+    req.on('end', () => {
+      try { resolve(JSON.parse(data)); }
+      catch { resolve({}); }
     });
+    req.on('error', reject);
+  });
 }
 
 // NEW: Track referral opens
@@ -178,36 +178,35 @@ async function handleTrackReferral(req, res) {
 
   try {
     const body = await parseBody(req);
-    const { referralId, status } = body;  // ← ONLY NEED THESE 2
+    const { referralId, status, referrerId } = body;  // ← ONLY NEED THESE 2
 
     if (!referralId || !status) {
       return res.status(400).json({ error: 'Missing referralId or status' });
     }
 
     // ✅ GENERATE EXACT Elysium-style key: "ref-[TIMESTAMP]"
-    const refKey = `ref-${Date.now()}`;
+    const refKey = referralId;
 
     // ✅ FIND referrer by uid and SAVE under THEIR referrals
     const mainformRef = db.ref('Mainformdata');
-    const snapshot = await mainformRef.orderByChild('uid').equalTo(body.referrerId).once('value');
+    const snapshot = await mainformRef.orderByChild('uid').equalTo(referrerId).once('value');
 
     if (snapshot.exists()) {
       const promises = [];
       snapshot.forEach((child) => {
-        const entryKey = child.key;
-        // ✅ EXACT Elysium structure: ONLY status + timestamp
         promises.push(
-          db.ref(`Mainformdata/${entryKey}/referrals/${refKey}`).set({
-            status,                           // "opened"
-            timestamp: Date.now()             // Simple number timestamp
+          db.ref(`Mainformdata/${child.key}/referrals/${refKey}`).set({
+            status,
+            timestamp: Date.now()
           })
         );
       });
-      await Promise.all(promises);  // ✅ FIXED async bug
-      res.json({ success: true, refKey });
+      await Promise.all(promises);
+      res.json({ success: true, refKey });  // Return SAME ID
     } else {
       res.status(404).json({ error: 'Referrer not found' });
     }
+
   } catch (error) {
     console.error('Track referral error:', error);
     res.status(500).json({ error: 'Tracking failed' });
