@@ -184,30 +184,35 @@ export default async function handler(req, res) {
       })
     ]);
 
-    // 7. MLM REFERRAL CHAIN (unchanged)
-    if (referredBy && referralId) {
-      try {
-        const referrerSnap = await db.ref(`users/${referredBy}`).once('value');
-        if (referrerSnap.exists()) {
-          const referrerFormSnap = await db.ref('Mainformdata')
-            .orderByChild('uid').equalTo(referredBy).once('value');
 
-          referrerFormSnap.forEach(snapshot => {
-            const referrerKey = snapshot.key;
-            db.ref(`Mainformdata/${referrerKey}/referrals/${referralId}`).update({
-              name: name.trim(),
-              email: emailLower,
-              mobile: mobile?.trim() || '',
-              status: 'completed',
-              completedAt: Date.now()
-            });
-          });
-          console.log('✅ Referral chain updated');
-        }
-      } catch (referralError) {
-        console.log('⚠️ Referral update skipped:', referralError.message);
-      }
-    }
+    // 🔥 7. MLM REFERRAL CHAIN - UPDATE USER A's REFERRAL WITH USER B's DETAILS
+if (referredBy && referralId) {
+  try {
+    console.log('🔗 Updating referral chain:', { referredBy, referralId });
+
+    // Find User A's Mainformdata entry
+    const referrerFormSnap = await db.ref('Mainformdata')
+      .orderByChild('uid').equalTo(referredBy).once('value');
+
+    referrerFormSnap.forEach(async (snapshot) => {
+      const referrerKey = snapshot.key;
+
+      // ✅ EXACT Elysium structure: Update User B's details under User A's referral
+      await db.ref(`Mainformdata/${referrerKey}/referrals/${referralId}`).update({
+        name: name.trim(),
+        email: emailLower,
+        mobile: mobile?.trim() || '',
+        status: 'completed',        // ✅ Status change
+        completedAt: Date.now()     // ✅ Completion timestamp
+      });
+
+      console.log('✅ Referral chain updated for User A:', referrerKey);
+    });
+  } catch (referralError) {
+    console.log('⚠️ Referral update skipped:', referralError.message);
+  }
+}
+
 
     // 8. GOOGLE SHEETS (unchanged)
     if (process.env.GOOGLE_SHEETS_URL) {
