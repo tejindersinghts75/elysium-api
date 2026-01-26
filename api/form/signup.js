@@ -133,30 +133,30 @@ export default async function handler(req, res) {
     let clerkSuccess = false;  // 🔑 NEW FLAG
 
     try {
-  const user = await clerkClient.users.createUser({
-    emailAddress: [emailLower],
-    username: username,
-    firstName,
-    lastName,
-    password: randomPassword,
-    skipEmailVerification: true,
-    unsafeMetadata: {
-      mobile: mobile?.trim() || '',
-      selectedCity: selectedCity || 'Not selected',
-      profession: profession || '',
-      income: income || 'Not selected',
-      household: household || 'Not selected',
-      why: why?.trim() || '',
-      createdAt: Date.now()
+      const user = await clerkClient.users.createUser({
+        emailAddress: [emailLower],
+        username: username,
+        firstName,
+        lastName,
+        password: randomPassword,
+        skipEmailVerification: true,
+        unsafeMetadata: {
+          mobile: mobile?.trim() || '',
+          selectedCity: selectedCity || 'Not selected',
+          profession: profession || '',
+          income: income || 'Not selected',
+          household: household || 'Not selected',
+          why: why?.trim() || '',
+          createdAt: Date.now()
+        }
+      });
+      userId = user.id;
+      clerkSuccess = true;  // ✅ Clerk worked!
+      console.log('✅ Clerk user created:', userId);
+    } catch (clerkError) {
+      console.error('❌ Clerk creation FAILED:', clerkError.message);
+      userId = `fallback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     }
-  });
-  userId = user.id;
-  clerkSuccess = true;  // ✅ Clerk worked!
-  console.log('✅ Clerk user created:', userId);
-} catch (clerkError) {
-  console.error('❌ Clerk creation FAILED:', clerkError.message);
-  userId = `fallback_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-}
 
     const timestampKey = Date.now().toString();
 
@@ -186,32 +186,37 @@ export default async function handler(req, res) {
 
 
     // 🔥 7. MLM REFERRAL CHAIN - UPDATE USER A's REFERRAL WITH USER B's DETAILS
-if (referredBy && referralId) {
-  try {
-    console.log('🔗 Updating referral chain:', { referredBy, referralId });
+    // 🔥 7. MLM REFERRAL CHAIN - UPDATE SAME REFERRAL ID!
+    if (referredBy && referralId) {
+      try {
+        console.log('🔗 Updating referral chain:', { referredBy, referralId });
 
-    // Find User A's Mainformdata entry
-    const referrerFormSnap = await db.ref('Mainformdata')
-      .orderByChild('uid').equalTo(referredBy).once('value');
+        const referrerFormSnap = await db.ref('Mainformdata')
+          .orderByChild('uid').equalTo(referredBy).once('value');
 
-    referrerFormSnap.forEach(async (snapshot) => {
-      const referrerKey = snapshot.key;
+        // ✅ FIXED: Collect ALL promises → Wait for ALL
+        const updatePromises = [];
+        referrerFormSnap.forEach((snapshot) => {
+          const referrerKey = snapshot.key;
+          updatePromises.push(
+            db.ref(`Mainformdata/${referrerKey}/referrals/${referralId}`).update({
+              name: name.trim(),
+              email: emailLower,
+              mobile: mobile?.trim() || '',
+              status: 'completed',
+              completedAt: Date.now()
+            })
+          );
+        });
 
-      // ✅ EXACT Elysium structure: Update User B's details under User A's referral
-      await db.ref(`Mainformdata/${referrerKey}/referrals/${referralId}`).update({
-        name: name.trim(),
-        email: emailLower,
-        mobile: mobile?.trim() || '',
-        status: 'completed',        // ✅ Status change
-        completedAt: Date.now()     // ✅ Completion timestamp
-      });
+        // ✅ WAIT FOR ALL UPDATES
+        await Promise.all(updatePromises);
+        console.log('✅ SAME referral updated:', referralId);
 
-      console.log('✅ Referral chain updated for User A:', referrerKey);
-    });
-  } catch (referralError) {
-    console.log('⚠️ Referral update skipped:', referralError.message);
-  }
-}
+      } catch (referralError) {
+        console.log('⚠️ Referral update skipped:', referralError.message);
+      }
+    }
 
 
     // 8. GOOGLE SHEETS (unchanged)
@@ -242,29 +247,29 @@ if (referredBy && referralId) {
 
     console.log(`✅ FULL SUCCESS: ${userId} (${ip}) in ${Date.now() - startTime}ms`);
 
-   // 🔥 4. CRITICAL: ONLY REDIRECT IF CLERK SUCCEEDED
-if (clerkSuccess) {
-  console.log(`✅ FULL SUCCESS with Clerk: ${userId}`);
-  res.json({
-    success: true,
-    userId: userId,
-    email: emailLower,
-    tempPassword: randomPassword,  // ✅ Always valid
-    firstName,
-    redirect: '/paymentpagetest'    // ✅ Only when Clerk works
-  });
-} else {
-  console.log(`⚠️ Clerk failed, partial success: ${userId}`);
-  res.json({
-    success: true,
-    userId: userId,
-    email: emailLower,
-    tempPassword: null,            // ❌ No password = no auto-login
-    firstName,
-    redirect: null,                // ❌ No payment page redirect
-    warning: 'Clerk unavailable, account saved but payment requires login'
-  });
-}
+    // 🔥 4. CRITICAL: ONLY REDIRECT IF CLERK SUCCEEDED
+    if (clerkSuccess) {
+      console.log(`✅ FULL SUCCESS with Clerk: ${userId}`);
+      res.json({
+        success: true,
+        userId: userId,
+        email: emailLower,
+        tempPassword: randomPassword,  // ✅ Always valid
+        firstName,
+        redirect: '/paymentpagetest'    // ✅ Only when Clerk works
+      });
+    } else {
+      console.log(`⚠️ Clerk failed, partial success: ${userId}`);
+      res.json({
+        success: true,
+        userId: userId,
+        email: emailLower,
+        tempPassword: null,            // ❌ No password = no auto-login
+        firstName,
+        redirect: null,                // ❌ No payment page redirect
+        warning: 'Clerk unavailable, account saved but payment requires login'
+      });
+    }
 
 
   } catch (error) {
