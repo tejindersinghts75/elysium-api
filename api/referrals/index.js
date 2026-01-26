@@ -2,6 +2,14 @@ import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 import { createClerkClient } from '@clerk/backend';
 
+function generateRandomPassword(length = 12) {
+  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
+  let password = '';
+  for (let i = 0; i < length; i++) {
+    password += characters[Math.floor(Math.random() * characters.length)];
+  }
+  return password;
+}
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
@@ -346,11 +354,3 @@ async function handleEmailSignup(req, res) {
   }
 }
 
-function generateRandomPassword(length = 12) {
-  const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()';
-  let password = '';
-  for (let i = 0; i < length; i++) {
-    password += characters[Math.floor(Math.random() * characters.length)];
-  }
-  return password;
-}
