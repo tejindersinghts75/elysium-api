@@ -27,7 +27,7 @@ export default async function handler(req, res) {
       case 'track': return await handleTrackReferral(req, res);     // ← NEW
       case 'signup': return await handleSignup(req, res);
       case 'email-signup': return await handleEmailSignup(req, res);  // ✅ ADD THIS
-      default: return res.status(400).json({ error: 'Invalid action', available: ['generate-link', 'submit-form', 'send-email'] });
+      default: return res.status(400).json({ error: 'Invalid action', available: ['generate-link', 'submit-form', 'send-email', 'track', 'signup', 'email-signup'] });
     }
   } catch (error) {
     console.error('Referral API error:', error);
