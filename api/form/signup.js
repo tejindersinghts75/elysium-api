@@ -3,7 +3,6 @@ import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 import { createClerkClient } from '@clerk/backend';
 
-
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
   credential: cert(serviceAccount),
@@ -15,16 +14,12 @@ const clerkClient = createClerkClient({
   secretKey: process.env.CLERK_SECRET_KEY,
 });
 
-
-
-// 🔥 SINGLE HANDLER (NO DUPLICATES)
 export default async function handler(req, res) {
-  // 🔥 CORS HEADERS (CORRECT POSITION)
+  // 🔥 CORS HEADERS FIRST
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  // Handle preflight
   if (req.method === 'OPTIONS') {
     res.status(200).end();
     return;
@@ -34,28 +29,25 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-
   const startTime = Date.now();
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
   try {
-    // 🔥 FIX 1: Parse FormData PROPERLY
+    // 🔥 PARSE FORMDATA
     const form = formidable({ multiples: false });
     const [fields] = await form.parse(req);
 
-    // Convert to plain object
     const body = {};
     for (const key of Object.keys(fields)) {
       body[key] = fields[key][0] || fields[key];
     }
 
-    // 🔥 FIX 2: Use `body` not `req.body`
     const {
       name, email, mobile, selectedCity, profession, income, household, why,
       captchaToken, referredBy, referralId
     } = body;
 
-    console.log('📥 Received form data:', { name, email, captchaToken: captchaToken ? '✓' : '✗' });
+    console.log('📥 Form data:', { name, email, captchaToken: captchaToken ? '✓' : '✗' });
 
     // 1. RATE LIMITING
     const cleanIp = ip.replace(/\./g, '_').replace(/:/g, '_');
@@ -67,7 +59,7 @@ export default async function handler(req, res) {
     }
     await db.ref(rateKey).transaction(current => (current || 0) + 1);
 
-    // 2. CAPTCHA VALIDATION
+    // 2. CAPTCHA
     if (captchaToken) {
       const captchaRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
         method: 'POST',
@@ -80,7 +72,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 3. VALIDATION
+    // 3. BASIC VALIDATION
     if (!name || !email) {
       return res.status(400).json({ error: 'Name and email required' });
     }
@@ -90,48 +82,103 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Invalid email format' });
     }
 
-    // 4. DUAL VALIDATION: CLERK + FIREBASE
-    console.log('🔍 Checking dual validation for:', emailLower);
+    // 🔥 4. SMART 3-STAGE REGISTRATION FLOW
+    console.log('🔍 Smart registration flow for:', emailLower);
 
-    // CLERK CHECK
+    // STAGE 1: CLERK CHECK
     let clerkUserExists = false;
+    let existingClerkUserId = null;
     try {
       const userListResponse = await clerkClient.users.getUserList({
         emailAddress: [emailLower],
         limit: 1,
       });
       if (userListResponse.data.length > 0) {
-        console.log('❌ User exists in Clerk:', userListResponse.data[0].id);
         clerkUserExists = true;
+        existingClerkUserId = userListResponse.data[0].id;
+        console.log('✅ Stage 1 - Clerk user found:', existingClerkUserId);
       }
     } catch (clerkError) {
       console.error('Clerk check failed:', clerkError.message);
     }
 
+    // STAGE 2 & 3: If Clerk exists → Check users/ + Mainformdata
     if (clerkUserExists) {
+      // Check users/ collection
+      const userCheck = await db.ref(`users/${existingClerkUserId}`).once('value');
+      const firebaseUserExists = userCheck.exists();
+      console.log('✅ Stage 2 - Firebase users/ check:', firebaseUserExists ? 'EXISTS' : 'NOT FOUND');
+
+      if (firebaseUserExists) {
+        // Check Mainformdata
+        const mainformCheck = await db.ref('Mainformdata').orderByChild('uid').equalTo(existingClerkUserId).once('value');
+        if (mainformCheck.exists()) {
+          let targetEntryKey = null;
+          mainformCheck.forEach((snapshot) => {
+            targetEntryKey = snapshot.key;
+          });
+          console.log('🎉 Stage 3 - UPDATE MODE! Entry:', targetEntryKey);
+
+          // 🔥 IMMEDIATELY UPDATE EXISTING ENTRY
+          await db.ref(`Mainformdata/${targetEntryKey}`).update({
+            name: name.trim(),
+            email: emailLower,
+            mobile: mobile?.trim() || '',
+            selectedCity: selectedCity || '',
+            profession: profession || '',
+            income: income || '',
+            household: household || '',
+            why: why?.trim() || '',
+            referredBy: referredBy || '',
+            updatedAt: Date.now()
+          });
+
+          // Update users/ collection too
+          const cleanName = name.trim().replace(/[^a-zA-Z\s]/g, '');
+          const firstName = cleanName.split(' ')[0] || 'User';
+          const lastName = cleanName.split(' ').slice(1).join(' ') || '';
+          await db.ref(`users/${existingClerkUserId}`).update({
+            firstname: firstName,
+            lastname: lastName,
+            email: emailLower,
+            mobile: mobile?.trim() || '',
+            updatedAt: Date.now()
+          });
+
+          console.log('✅ UPDATE MODE COMPLETE!');
+          return res.json({
+            success: true,
+            mode: 'update',
+            userId: existingClerkUserId,
+            email: emailLower,
+            firstName,
+            message: 'Welcome back! Form updated successfully!',
+            redirect: '/paymentpagetest'
+          });
+        }
+      }
+    }
+
+    // ✅ NEW USER - Continue with full creation flow
+    console.log('✅ NEW USER - Creating everything fresh');
+
+    // 🔥 Clerk + Firebase dual check for new users (FINAL SAFETY)
+    const firebaseEmailCheck = await db.ref('users').orderByChild('email').equalTo(emailLower).once('value');
+    if (firebaseEmailCheck.exists()) {
       return res.status(400).json({ error: 'User already registered with this email' });
     }
 
-    // FIREBASE CHECK
-    const emailCheck = await db.ref('users').orderByChild('email').equalTo(emailLower).once('value');
-    if (emailCheck.exists()) {
-      console.log('❌ User exists in Firebase');
-      return res.status(400).json({ error: 'User already registered with this email' });
-    }
-
-    // ✅ SANITIZE NAME FOR USERNAME
+    // Sanitize name
     const cleanName = name.trim().replace(/[^a-zA-Z\s]/g, '');
     const firstName = cleanName.split(' ')[0] || 'User';
     const lastName = cleanName.split(' ').slice(1).join(' ') || '';
     const username = `${firstName.toLowerCase().replace(/\s+/g, '')}${Math.floor(Math.random() * 10000)}`;
 
-
-    // ✅ DECLARE OUTSIDE TRY BLOCK
-
     const randomPassword = `auto_${Math.random().toString(36).slice(-8)}`;
     let userId;
-    let clerkSuccess = false;  // 🔑 NEW FLAG
+    let clerkSuccess = false;
 
+    // Create Clerk user
     try {
       const user = await clerkClient.users.createUser({
         emailAddress: [emailLower],
@@ -151,7 +198,7 @@ export default async function handler(req, res) {
         }
       });
       userId = user.id;
-      clerkSuccess = true;  // ✅ Clerk worked!
+      clerkSuccess = true;
       console.log('✅ Clerk user created:', userId);
     } catch (clerkError) {
       console.error('❌ Clerk creation FAILED:', clerkError.message);
@@ -160,7 +207,7 @@ export default async function handler(req, res) {
 
     const timestampKey = Date.now().toString();
 
-    // 6. FIREBASE WRITES
+    // Firebase writes
     await Promise.all([
       db.ref(`Mainformdata/${timestampKey}`).set({
         uid: userId,
@@ -184,17 +231,13 @@ export default async function handler(req, res) {
       })
     ]);
 
-
-    // 🔥 7. MLM REFERRAL CHAIN - UPDATE USER A's REFERRAL WITH USER B's DETAILS
-    // 🔥 7. MLM REFERRAL CHAIN - UPDATE SAME REFERRAL ID!
+    // 🔥 REFERRAL CHAIN UPDATE
     if (referredBy && referralId) {
       try {
         console.log('🔗 Updating referral chain:', { referredBy, referralId });
-
         const referrerFormSnap = await db.ref('Mainformdata')
           .orderByChild('uid').equalTo(referredBy).once('value');
 
-        // ✅ FIXED: Collect ALL promises → Wait for ALL
         const updatePromises = [];
         referrerFormSnap.forEach((snapshot) => {
           const referrerKey = snapshot.key;
@@ -209,17 +252,14 @@ export default async function handler(req, res) {
           );
         });
 
-        // ✅ WAIT FOR ALL UPDATES
         await Promise.all(updatePromises);
-        console.log('✅ SAME referral updated:', referralId);
-
+        console.log('✅ Referral updated:', referralId);
       } catch (referralError) {
         console.log('⚠️ Referral update skipped:', referralError.message);
       }
     }
 
-
-    // 8. GOOGLE SHEETS (unchanged)
+    // Google Sheets
     if (process.env.GOOGLE_SHEETS_URL) {
       const sheetsData = {
         formType: "formmodal",
@@ -247,30 +287,26 @@ export default async function handler(req, res) {
 
     console.log(`✅ FULL SUCCESS: ${userId} (${ip}) in ${Date.now() - startTime}ms`);
 
-    // 🔥 4. CRITICAL: ONLY REDIRECT IF CLERK SUCCEEDED
     if (clerkSuccess) {
-      console.log(`✅ FULL SUCCESS with Clerk: ${userId}`);
       res.json({
         success: true,
         userId: userId,
         email: emailLower,
-        tempPassword: randomPassword,  // ✅ Always valid
+        tempPassword: randomPassword,
         firstName,
-        redirect: '/paymentpagetest'    // ✅ Only when Clerk works
+        redirect: '/paymentpagetest'
       });
     } else {
-      console.log(`⚠️ Clerk failed, partial success: ${userId}`);
       res.json({
         success: true,
         userId: userId,
         email: emailLower,
-        tempPassword: null,            // ❌ No password = no auto-login
+        tempPassword: null,
         firstName,
-        redirect: null,                // ❌ No payment page redirect
+        redirect: null,
         warning: 'Clerk unavailable, account saved but payment requires login'
       });
     }
-
 
   } catch (error) {
     console.error('💥 CRITICAL ERROR:', error);
