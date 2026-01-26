@@ -187,8 +187,6 @@ async function parseBody(req) {
   });
 }
 
-// NEW: Track referral opens
-// ✅ FIXED: Elysium EXACT structure (status + timestamp only)
 async function handleTrackReferral(req, res) {
   // ALL CORS HEADERS FIRST
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -207,22 +205,23 @@ async function handleTrackReferral(req, res) {
 
   try {
     const body = await parseBody(req);
-    const { referralId, status, referrerId } = body;  // ← ONLY NEED THESE 2
+    const { referralId, status, referrerId } = body;
 
     if (!referralId || !status) {
       return res.status(400).json({ error: 'Missing referralId or status' });
     }
 
-    // ✅ GENERATE EXACT Elysium-style key: "ref-[TIMESTAMP]"
     const refKey = referralId;
-
-    // ✅ FIND referrer by uid and SAVE under THEIR referrals
     const mainformRef = db.ref('Mainformdata');
     const snapshot = await mainformRef.orderByChild('uid').equalTo(referrerId).once('value');
 
+    let targetNodeKey = null;
+
     if (snapshot.exists()) {
+      // ✅ CURRENT FUNCTIONALITY PRESERVED - Multiple entries supported
       const promises = [];
       snapshot.forEach((child) => {
+        targetNodeKey = child.key;  // Store first key found
         promises.push(
           db.ref(`Mainformdata/${child.key}/referrals/${refKey}`).set({
             status,
@@ -231,16 +230,88 @@ async function handleTrackReferral(req, res) {
         );
       });
       await Promise.all(promises);
-      res.json({ success: true, refKey });  // Return SAME ID
     } else {
-      res.status(404).json({ error: 'Referrer not found' });
+      // ✅ NEW FUNCTIONALITY - Auto-create Mainformdata for email-signup users
+      console.log('🔗 Creating Mainformdata entry for referrer:', referrerId);
+      targetNodeKey = Date.now().toString();
+
+      // Create minimal Mainformdata entry
+      await mainformRef.child(targetNodeKey).set({
+        uid: referrerId,
+        createdAt: Date.now(),
+        referrals: {}
+      });
+
+      // Immediately add this referral
+      await mainformRef.child(`${targetNodeKey}/referrals/${refKey}`).set({
+        status,
+        timestamp: Date.now()
+      });
     }
+
+    res.json({ success: true, refKey });  // ✅ SAME RESPONSE - Frontend unchanged
 
   } catch (error) {
     console.error('Track referral error:', error);
     res.status(500).json({ error: 'Tracking failed' });
   }
 }
+
+
+// NEW: Track referral opens
+// ✅ FIXED: Elysium EXACT structure (status + timestamp only)
+// async function handleTrackReferral(req, res) {
+//   // ALL CORS HEADERS FIRST
+//   res.setHeader('Access-Control-Allow-Origin', '*');
+//   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+//   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+//   if (req.method === 'OPTIONS') {
+//     res.status(200).end();
+//     return;
+//   }
+
+//   if (req.method !== 'POST') {
+//     res.status(405).json({ error: 'POST required' });
+//     return;
+//   }
+
+//   try {
+//     const body = await parseBody(req);
+//     const { referralId, status, referrerId } = body;  // ← ONLY NEED THESE 2
+
+//     if (!referralId || !status) {
+//       return res.status(400).json({ error: 'Missing referralId or status' });
+//     }
+
+//     // ✅ GENERATE EXACT Elysium-style key: "ref-[TIMESTAMP]"
+//     const refKey = referralId;
+
+//     // ✅ FIND referrer by uid and SAVE under THEIR referrals
+//     const mainformRef = db.ref('Mainformdata');
+//     const snapshot = await mainformRef.orderByChild('uid').equalTo(referrerId).once('value');
+
+//     if (snapshot.exists()) {
+//       const promises = [];
+//       snapshot.forEach((child) => {
+//         promises.push(
+//           db.ref(`Mainformdata/${child.key}/referrals/${refKey}`).set({
+//             status,
+//             timestamp: Date.now()
+//           })
+//         );
+//       });
+//       await Promise.all(promises);
+//       res.json({ success: true, refKey });  // Return SAME ID
+//     } else {
+//       res.status(404).json({ error: 'Referrer not found' });
+//     }
+
+//   } catch (error) {
+//     console.error('Track referral error:', error);
+//     res.status(500).json({ error: 'Tracking failed' });
+//   }
+// }
 
 
 // NEW: Track successful signups
