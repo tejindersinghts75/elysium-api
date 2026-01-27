@@ -119,6 +119,10 @@ export default async function handler(req, res) {
           });
           console.log('🎉 Stage 3 - UPDATE MODE! Entry:', targetEntryKey);
 
+
+
+
+
           // 🔥 IMMEDIATELY UPDATE EXISTING ENTRY
           await db.ref(`Mainformdata/${targetEntryKey}`).update({
             name: name.trim(),
@@ -132,6 +136,56 @@ export default async function handler(req, res) {
             referredBy: referredBy || '',
             updatedAt: Date.now()
           });
+
+
+
+
+
+
+
+          // 🔥 NEW: UPDATE USER A'S REFERRAL (BULLETPROOF)
+          console.log('🔗 Updating User A referral...');
+          const userBEntry = await db.ref(`Mainformdata/${targetEntryKey}`).once('value');
+          const originalReferredBy = userBEntry.val()?.referredBy;
+
+          if (originalReferredBy) {
+            try {
+              const userAEntry = await db.ref('Mainformdata').orderByChild('uid').equalTo(originalReferredBy).once('value');
+
+              userAEntry.forEach((snapshot) => {
+                const userAKey = snapshot.key;
+
+                // Sequential processing - no nested awaits in loops
+                db.ref(`Mainformdata/${userAKey}/referrals`).once('value').then((referrals) => {
+                  referrals.forEach((refSnap) => {
+                    const refData = refSnap.val();
+                    if (refData?.email === emailLower && refData?.status === 'opened') {
+                      db.ref(`Mainformdata/${userAKey}/referrals/${refSnap.key}`).update({
+                        name: name.trim(),
+                        email: emailLower,
+                        mobile: mobile?.trim() || '',
+                        status: 'completed',
+                        completedAt: Date.now()
+                      }).then(() => {
+                        console.log('✅ User A referral updated!');
+                      });
+                    }
+                  });
+                });
+              });
+            } catch (error) {
+              console.log('⚠️ User A referral update skipped:', error.message);
+            }
+          }
+
+
+
+
+
+
+
+
+
 
           // Update users/ collection too
           const cleanName = name.trim().replace(/[^a-zA-Z\s]/g, '');
