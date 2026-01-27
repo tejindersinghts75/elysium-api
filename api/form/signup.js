@@ -142,41 +142,61 @@ export default async function handler(req, res) {
 
 
 
+// 🔥 DEBUG VERSION - WILL REVEAL EXACT PROBLEM
+console.log('🔗=== DEBUG: User B UPDATE MODE ===');
+console.log('📧 User B:', emailLower);
+console.log('🔑 targetEntryKey:', targetEntryKey);
 
-          // 🔥 NEW: UPDATE USER A'S REFERRAL (BULLETPROOF)
-          console.log('🔗 Updating User A referral...');
-          const userBEntry = await db.ref(`Mainformdata/${targetEntryKey}`).once('value');
-          const originalReferredBy = userBEntry.val()?.referredBy;
+// STEP 1: Check User B's referredBy
+const userBData = await db.ref(`Mainformdata/${targetEntryKey}`).once('value').then(s => s.val());
+console.log('👤 User B referredBy:', userBData?.referredBy);
 
-          if (originalReferredBy) {
-            try {
-              const userAEntry = await db.ref('Mainformdata').orderByChild('uid').equalTo(originalReferredBy).once('value');
+if (userBData?.referredBy) {
+  const userAUID = userBData.referredBy;
+  console.log('🔍 Looking for User A UID:', userAUID);
 
-              userAEntry.forEach((snapshot) => {
-                const userAKey = snapshot.key;
+  // STEP 2: Find User A
+  const userASnap = await db.ref('Mainformdata').orderByChild('uid').equalTo(userAUID).once('value');
+  console.log('✅ User A exists?', userASnap.exists());
 
-                // Sequential processing - no nested awaits in loops
-                db.ref(`Mainformdata/${userAKey}/referrals`).once('value').then((referrals) => {
-                  referrals.forEach((refSnap) => {
-                    const refData = refSnap.val();
-                    if (refData?.email === emailLower && refData?.status === 'opened') {
-                      db.ref(`Mainformdata/${userAKey}/referrals/${refSnap.key}`).update({
-                        name: name.trim(),
-                        email: emailLower,
-                        mobile: mobile?.trim() || '',
-                        status: 'completed',
-                        completedAt: Date.now()
-                      }).then(() => {
-                        console.log('✅ User A referral updated!');
-                      });
-                    }
-                  });
-                });
+  if (userASnap.exists()) {
+    userASnap.forEach((snap) => {
+      const userAKey = snap.key;
+      console.log('📁 User A key:', userAKey);
+
+      // STEP 3: Check referrals
+      db.ref(`Mainformdata/${userAKey}/referrals`).once('value').then((refs) => {
+        console.log('📊 User A referrals exist?', refs.exists());
+        if (refs.exists()) {
+          let foundMatch = false;
+          refs.forEach((refSnap) => {
+            const refData = refSnap.val();
+            console.log('🔍 REF:', refData?.email, refData?.status);
+
+            if (refData?.email === emailLower && refData?.status === 'opened') {
+              console.log('🎯 MATCH! Updating referral:', refSnap.key);
+              foundMatch = true;
+              db.ref(`Mainformdata/${userAKey}/referrals/${refSnap.key}`).update({
+                name: name.trim(),
+                email: emailLower,
+                mobile: mobile || '',
+                status: 'completed',
+                completedAt: Date.now()
+              }).then(() => {
+                console.log('✅🎉 USER A REFERRAL UPDATED!');
               });
-            } catch (error) {
-              console.log('⚠️ User A referral update skipped:', error.message);
             }
-          }
+          });
+          if (!foundMatch) console.log('❌ No matching referral found');
+        }
+      });
+    });
+  }
+} else {
+  console.log('❌ User B has NO referredBy field!');
+}
+console.log('🔗=== DEBUG END ===');
+
 
 
 
