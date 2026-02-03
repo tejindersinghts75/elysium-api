@@ -13,7 +13,6 @@ const app = initializeApp({
 const db = getDatabase(app);
 const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 
-// 🔥 VERCEL CONFIG - DISABLE AUTO BODY PARSER
 export const config = {
   api: {
     bodyParser: false
@@ -21,7 +20,6 @@ export const config = {
 };
 
 export default async function handler(req, res) {
-  // 🔥 CORS HEADERS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -31,22 +29,12 @@ export default async function handler(req, res) {
     return;
   }
 
-  let body;
-  try {
-    // 🔥 BUFFER RAW BODY FOR WEBHOOK + JSON
-    body = await buffer(req);
-    req.body = body;
-  } catch (error) {
-    console.error('Body buffer error:', error);
-    return res.status(400).json({ error: 'Invalid request body' });
-  }
-
-  // 🔥 1. WEBHOOK FIRST - RAW BUFFER NEEDED
+  // 🔥 WEBHOOK - Always needs raw body
   const signature = req.headers['stripe-signature'];
   if (signature) {
     try {
-      const rawBody = body; // Raw buffer for signature verification
-      const event = stripe.webhooks.constructEvent(rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET);
+      const body = await buffer(req);
+      const event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET);
 
       if (event.type === 'payment_intent.succeeded') {
         const paymentIntent = event.data.object;
@@ -57,7 +45,6 @@ export default async function handler(req, res) {
             'stripePayment.stripeChargeId': paymentIntent.charges.data[0]?.id,
             'stripePayment.processedAt': Date.now()
           });
-          console.log(`✅ Payment success → Firebase: ${firebaseEntryKey}`);
         }
       }
 
@@ -74,27 +61,23 @@ export default async function handler(req, res) {
       }
 
       res.json({ received: true });
-      return;
     } catch (error) {
       console.error('Webhook error:', error);
-      res.status(400).send(`Webhook error: ${error.message}`);
-      return;
+      res.status(400).send('Webhook error');
     }
+    return;
   }
 
-  // 🔥 2. CREATE PAYMENT INTENT (POST from frontend)
+  // 🔥 CREATE PAYMENT INTENT (POST only)
   if (req.method === 'POST') {
     try {
-      // 🔥 PARSE JSON BODY (buffer → string → object)
+      const body = await buffer(req);
       const bodyString = body.toString();
-      const parsedBody = JSON.parse(bodyString);
-      const { clerkUserId, amount = 49.99 } = parsedBody;
+      const { clerkUserId, amount = 49.99 } = JSON.parse(bodyString);
 
-      // Validate Clerk user
       await clerkClient.users.getUser(clerkUserId);
-
-      // Find existing Mainformdata entry
       const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+
       if (!snapshot.exists()) {
         return res.status(404).json({ error: 'User data not found' });
       }
@@ -102,17 +85,12 @@ export default async function handler(req, res) {
       let entryKey = null;
       snapshot.forEach(child => { entryKey = child.key; });
 
-      // Create Stripe PaymentIntent
       const paymentIntent = await stripe.paymentIntents.create({
-        amount: Math.round(amount * 100), // cents ✅
+        amount: Math.round(amount * 100),
         currency: 'usd',
-        metadata: {
-          clerkUserId,
-          firebaseEntryKey: entryKey
-        }
+        metadata: { clerkUserId, firebaseEntryKey: entryKey }
       });
 
-      // Store PENDING status
       await db.ref(`Mainformdata/${entryKey}`).update({
         stripePayment: {
           sessionId: `payment_${Date.now()}`,
@@ -130,12 +108,12 @@ export default async function handler(req, res) {
       });
     } catch (error) {
       console.error('Stripe create error:', error);
-      res.status(500).json({ error: 'Payment setup failed', details: error.message });
+      res.status(500).json({ error: 'Payment setup failed' });
     }
     return;
   }
 
-  // 🔥 3. CHECK PAYMENT STATUS (GET from frontend)
+  // 🔥 STATUS CHECK (GET only - NO BUFFERING!)
   if (req.method === 'GET') {
     try {
       const { clerkUserId } = req.query;
@@ -168,6 +146,5 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 🔥 4. INVALID METHOD
   res.status(405).json({ error: 'Method not allowed' });
 }
