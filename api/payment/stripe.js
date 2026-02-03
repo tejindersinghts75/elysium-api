@@ -2,6 +2,7 @@ import Stripe from 'stripe';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 import { createClerkClient } from '@clerk/backend';
+import { buffer } from 'micro';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -11,6 +12,13 @@ const app = initializeApp({
 });
 const db = getDatabase(app);
 const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
+
+// 🔥 VERCEL CONFIG - DISABLE AUTO BODY PARSER
+export const config = {
+  api: {
+    bodyParser: false
+  }
+};
 
 export default async function handler(req, res) {
   // 🔥 CORS HEADERS
@@ -23,15 +31,22 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 🔥 1. WEBHOOK FIRST - ONLY if stripe-signature header exists
+  let body;
+  try {
+    // 🔥 BUFFER RAW BODY FOR WEBHOOK + JSON
+    body = await buffer(req);
+    req.body = body;
+  } catch (error) {
+    console.error('Body buffer error:', error);
+    return res.status(400).json({ error: 'Invalid request body' });
+  }
+
+  // 🔥 1. WEBHOOK FIRST - RAW BUFFER NEEDED
   const signature = req.headers['stripe-signature'];
   if (signature) {
     try {
-      const event = stripe.webhooks.constructEvent(
-        typeof req.body === 'string' ? req.body : JSON.stringify(req.body),
-        signature,
-        process.env.STRIPE_WEBHOOK_SECRET
-      );
+      const rawBody = body; // Raw buffer for signature verification
+      const event = stripe.webhooks.constructEvent(rawBody, signature, process.env.STRIPE_WEBHOOK_SECRET);
 
       if (event.type === 'payment_intent.succeeded') {
         const paymentIntent = event.data.object;
@@ -59,19 +74,21 @@ export default async function handler(req, res) {
       }
 
       res.json({ received: true });
-      return; // 🔥 EXIT HERE
+      return;
     } catch (error) {
       console.error('Webhook error:', error);
-      res.status(400).send('Webhook error');
-      return; // 🔥 EXIT HERE
+      res.status(400).send(`Webhook error: ${error.message}`);
+      return;
     }
   }
 
   // 🔥 2. CREATE PAYMENT INTENT (POST from frontend)
   if (req.method === 'POST') {
     try {
-      const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-      const { clerkUserId, amount = 49.99 } = body;
+      // 🔥 PARSE JSON BODY (buffer → string → object)
+      const bodyString = body.toString();
+      const parsedBody = JSON.parse(bodyString);
+      const { clerkUserId, amount = 49.99 } = parsedBody;
 
       // Validate Clerk user
       await clerkClient.users.getUser(clerkUserId);
@@ -87,7 +104,7 @@ export default async function handler(req, res) {
 
       // Create Stripe PaymentIntent
       const paymentIntent = await stripe.paymentIntents.create({
-        amount: amount * 100, // cents
+        amount: Math.round(amount * 100), // cents ✅
         currency: 'usd',
         metadata: {
           clerkUserId,
@@ -113,7 +130,7 @@ export default async function handler(req, res) {
       });
     } catch (error) {
       console.error('Stripe create error:', error);
-      res.status(500).json({ error: 'Payment setup failed' });
+      res.status(500).json({ error: 'Payment setup failed', details: error.message });
     }
     return;
   }
