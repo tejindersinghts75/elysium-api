@@ -13,6 +13,7 @@ const db = getDatabase(app);
 const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 
 export default async function handler(req, res) {
+  // 🔥 CORS HEADERS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -22,8 +23,52 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 🔥 1. CREATE PAYMENT INTENT (ThankYou page loads)
-  if (req.method === 'POST' && !req.headers['stripe-signature']) {
+  // 🔥 1. WEBHOOK FIRST - ONLY if stripe-signature header exists
+  const signature = req.headers['stripe-signature'];
+  if (signature) {
+    try {
+      const event = stripe.webhooks.constructEvent(
+        typeof req.body === 'string' ? req.body : JSON.stringify(req.body),
+        signature,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
+
+      if (event.type === 'payment_intent.succeeded') {
+        const paymentIntent = event.data.object;
+        const { firebaseEntryKey } = paymentIntent.metadata;
+        if (firebaseEntryKey) {
+          await db.ref(`Mainformdata/${firebaseEntryKey}`).update({
+            'stripePayment.paymentStatus': 'success',
+            'stripePayment.stripeChargeId': paymentIntent.charges.data[0]?.id,
+            'stripePayment.processedAt': Date.now()
+          });
+          console.log(`✅ Payment success → Firebase: ${firebaseEntryKey}`);
+        }
+      }
+
+      if (event.type === 'payment_intent.payment_failed') {
+        const paymentIntent = event.data.object;
+        const { firebaseEntryKey } = paymentIntent.metadata;
+        if (firebaseEntryKey) {
+          await db.ref(`Mainformdata/${firebaseEntryKey}`).update({
+            'stripePayment.paymentStatus': 'failed',
+            'stripePayment.error': paymentIntent.last_payment_error?.message,
+            'stripePayment.processedAt': Date.now()
+          });
+        }
+      }
+
+      res.json({ received: true });
+      return; // 🔥 EXIT HERE
+    } catch (error) {
+      console.error('Webhook error:', error);
+      res.status(400).send('Webhook error');
+      return; // 🔥 EXIT HERE
+    }
+  }
+
+  // 🔥 2. CREATE PAYMENT INTENT (POST from frontend)
+  if (req.method === 'POST') {
     try {
       const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
       const { clerkUserId, amount = 49.99 } = body;
@@ -50,7 +95,7 @@ export default async function handler(req, res) {
         }
       });
 
-      // Store PENDING status in user's existing entry
+      // Store PENDING status
       await db.ref(`Mainformdata/${entryKey}`).update({
         stripePayment: {
           sessionId: `payment_${Date.now()}`,
@@ -70,9 +115,10 @@ export default async function handler(req, res) {
       console.error('Stripe create error:', error);
       res.status(500).json({ error: 'Payment setup failed' });
     }
+    return;
   }
 
-  // 🔥 2. CHECK PAYMENT STATUS
+  // 🔥 3. CHECK PAYMENT STATUS (GET from frontend)
   if (req.method === 'GET') {
     try {
       const { clerkUserId } = req.query;
@@ -99,49 +145,12 @@ export default async function handler(req, res) {
 
       res.json({ paymentStatus });
     } catch (error) {
+      console.error('Status check error:', error);
       res.status(500).json({ paymentStatus: 'error' });
     }
+    return;
   }
 
-  // 🔥 3. STRIPE WEBHOOK (Updates user's existing entry)
-  const signature = req.headers['stripe-signature'];
-  try {
-    const event = stripe.webhooks.constructEvent(
-      typeof req.body === 'string' ? req.body : JSON.stringify(req.body),
-      signature,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
-
-    if (event.type === 'payment_intent.succeeded') {
-      const paymentIntent = event.data.object;
-      const { firebaseEntryKey } = paymentIntent.metadata;
-
-      if (firebaseEntryKey) {
-        await db.ref(`Mainformdata/${firebaseEntryKey}`).update({
-          'stripePayment.paymentStatus': 'success',
-          'stripePayment.stripeChargeId': paymentIntent.charges.data[0]?.id,
-          'stripePayment.processedAt': Date.now()
-        });
-        console.log(`✅ Payment success → Firebase: ${firebaseEntryKey}`);
-      }
-    }
-
-    if (event.type === 'payment_intent.payment_failed') {
-      const paymentIntent = event.data.object;
-      const { firebaseEntryKey } = paymentIntent.metadata;
-
-      if (firebaseEntryKey) {
-        await db.ref(`Mainformdata/${firebaseEntryKey}`).update({
-          'stripePayment.paymentStatus': 'failed',
-          'stripePayment.error': paymentIntent.last_payment_error?.message,
-          'stripePayment.processedAt': Date.now()
-        });
-      }
-    }
-
-    res.json({ received: true });
-  } catch (error) {
-    console.error('Webhook error:', error);
-    res.status(400).send('Webhook error');
-  }
+  // 🔥 4. INVALID METHOD
+  res.status(405).json({ error: 'Method not allowed' });
 }
