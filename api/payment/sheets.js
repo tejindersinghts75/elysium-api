@@ -3,7 +3,10 @@ import { getDatabase } from 'firebase-admin/database';
 import { createClerkClient } from '@clerk/backend';
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-const app = initializeApp({ credential: cert(serviceAccount), databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/" });
+const app = initializeApp({ credential: cert(serviceAccount),
+  //databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/"
+    databaseURL:process.env.FIREBASE_URL
+});
 const db = getDatabase(app);
 const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 const GOOGLE_SHEETS_URL = process.env.GOOGLE_SHEETS_URL;

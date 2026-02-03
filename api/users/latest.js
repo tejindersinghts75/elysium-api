@@ -5,7 +5,8 @@ import { getDatabase } from 'firebase-admin/database';
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
   credential: cert(serviceAccount),
-  databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/"
+  //databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/"
+  databaseURL:process.env.FIREBASE_URL
 });
 const db = getDatabase(app);
 
