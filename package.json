@@ -9,6 +9,7 @@
     "@clerk/backend": "^2.29.5",
     "firebase-admin": "^12.5.0",
     "formidable": "^3.5.4",
+    "micro": "^10.0.1",
     "uuid": "^10.0.0"
   }
 }
