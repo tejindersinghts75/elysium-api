@@ -19,226 +19,317 @@ export const config = {
   }
 };
 
-// 🔥 FIXED: Safe Clerk verification
-async function safeClerkVerify(clerkUserId) {
-  try {
-    await clerkClient.users.getUser(clerkUserId);
-    console.log(`✅ Clerk user verified: ${clerkUserId}`);
-    return { valid: true };
-  } catch (error) {
-    if (error.clerkError && error.status === 404) {
-      console.log(`⚠️ Clerk user ${clerkUserId} not found - trusting Firebase data`);
-      return { valid: 'firebase_only' }; // Continue anyway
-    }
-    console.error('❌ Real Clerk auth error:', error.message);
-    throw error;
-  }
-}
+// Cache for pending payment intents to prevent duplicates
+const pendingIntents = new Map();
 
 export default async function handler(req, res) {
-  // 🔥 FIXED: Better CORS
-  const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['https://yourdomain.com'];
-  const origin = req.headers.origin;
-  const corsOrigin = allowedOrigins.includes(origin) || allowedOrigins.includes('*') ? origin : allowedOrigins[0];
+  console.log(`📦 ${new Date().toISOString()} ${req.method} ${req.url}`);
 
-  res.setHeader('Access-Control-Allow-Origin', corsOrigin);
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+    return res.status(200).end();
   }
 
   const signature = req.headers['stripe-signature'];
 
-  // 🔥 WEBHOOK HANDLER (UNCHANGED - WORKING PERFECTLY)
+  // ========== WEBHOOK HANDLER ==========
   if (signature) {
     try {
       const body = await buffer(req);
-      const event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET);
+      const event = stripe.webhooks.constructEvent(
+        body,
+        signature,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
 
-      console.log(`🔔 Webhook received: ${event.type}`);
+      console.log(`🔔 Webhook: ${event.type} (${event.id})`);
+      console.log('📋 Event data:', JSON.stringify(event.data.object, null, 2));
 
+      // Handle successful payment
       if (event.type === 'payment_intent.succeeded') {
         const paymentIntent = event.data.object;
-        const { firebaseEntryKey } = paymentIntent.metadata;
+        const { clerkUserId, firebaseEntryKey } = paymentIntent.metadata;
 
-        if (firebaseEntryKey) {
-          console.log(`✅ Webhook success for entry: ${firebaseEntryKey}`);
+        console.log(`💰 Payment succeeded:`, {
+          intentId: paymentIntent.id,
+          amount: paymentIntent.amount / 100,
+          clerkUserId,
+          firebaseEntryKey,
+          metadata: paymentIntent.metadata
+        });
 
-          await db.ref(`Mainformdata/${firebaseEntryKey}/stripePayment`).update({
-            paymentStatus: 'success',
-            stripeChargeId: paymentIntent.latest_charge || paymentIntent.charges?.data?.[0]?.id,
-            processedAt: Date.now(),
-            stripePaymentIntentId: paymentIntent.id,
-            lastWebhookEvent: 'payment_intent.succeeded'
-          });
-
-          console.log(`📝 Firebase updated for ${firebaseEntryKey}`);
+        if (!firebaseEntryKey) {
+          console.error('❌ Missing firebaseEntryKey in metadata');
+          return res.json({ received: true });
         }
+
+        // Verify user exists
+        try {
+          await clerkClient.users.getUser(clerkUserId);
+          console.log(`✅ User verified: ${clerkUserId}`);
+        } catch (userError) {
+          console.error(`❌ User not found: ${clerkUserId}`, userError.message);
+          // Still update Firebase if we have the entry key
+        }
+
+        // Update Firebase with atomic transaction
+        const paymentRef = db.ref(`Mainformdata/${firebaseEntryKey}/stripePayment`);
+        await paymentRef.update({
+          paymentStatus: 'success',
+          stripeChargeId: paymentIntent.latest_charge || paymentIntent.charges?.data?.[0]?.id,
+          stripePaymentIntentId: paymentIntent.id,
+          processedAt: Date.now(),
+          lastUpdated: Date.now(),
+          amount: paymentIntent.amount / 100,
+          lastWebhookEvent: 'payment_intent.succeeded',
+          webhookReceivedAt: Date.now()
+        });
+
+        console.log(`✅ Firebase updated for ${firebaseEntryKey}`);
+
+        // Clear from pending cache
+        pendingIntents.delete(firebaseEntryKey);
       }
 
+      // Handle failed payment
       if (event.type === 'payment_intent.payment_failed') {
         const paymentIntent = event.data.object;
-        const { firebaseEntryKey } = paymentIntent.metadata;
+        const { clerkUserId, firebaseEntryKey } = paymentIntent.metadata;
 
         if (firebaseEntryKey) {
-          console.log(`❌ Webhook failed for entry: ${firebaseEntryKey}`);
-
           await db.ref(`Mainformdata/${firebaseEntryKey}/stripePayment`).update({
             paymentStatus: 'failed',
             error: paymentIntent.last_payment_error?.message || 'Payment failed',
             processedAt: Date.now(),
+            lastUpdated: Date.now(),
             lastWebhookEvent: 'payment_intent.payment_failed'
           });
+
+          pendingIntents.delete(firebaseEntryKey);
         }
       }
 
       res.json({ received: true });
     } catch (error) {
       console.error('❌ Webhook error:', error);
-      res.status(400).json({ error: 'Webhook error' });
+      res.status(400).json({ error: 'Webhook error', details: error.message });
     }
     return;
   }
 
-  // 🔥 CREATE INTENT HANDLER (FIXED)
+  // ========== CREATE PAYMENT INTENT ==========
   if (req.method === 'POST') {
     try {
       const body = await buffer(req);
-      const bodyString = body.toString();
-      const { clerkUserId, amount = 49.99 } = JSON.parse(bodyString);
+      const { clerkUserId, amount = 49.99 } = JSON.parse(body.toString());
 
-      // 🔥 DEBUG LOGS
-      console.log(`🔍 RAW clerkUserId RECEIVED: "${clerkUserId}"`);
-      console.log(`🔍 RAW body:`, bodyString);
+      console.log(`🎯 Creating intent for user: ${clerkUserId}`);
 
-      // 🔥 FIXED: Safe Clerk verification
-      const clerkStatus = await safeClerkVerify(clerkUserId);
-      if (clerkStatus.valid === false) {
-        return res.status(401).json({ error: 'Invalid user' });
+      // Verify user exists FIRST
+      let clerkUser;
+      try {
+        clerkUser = await clerkClient.users.getUser(clerkUserId);
+        console.log(`✅ User verified: ${clerkUser.id} (${clerkUser.emailAddresses?.[0]?.emailAddress})`);
+      } catch (error) {
+        console.error(`❌ Invalid user ID: ${clerkUserId}`, error.message);
+        return res.status(404).json({
+          error: 'User not found',
+          details: `No user with ID: ${clerkUserId}`
+        });
       }
 
-      // Check for existing user data in Firebase
-      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+      // Get user's data from Firebase
+      const snapshot = await db.ref('Mainformdata')
+        .orderByChild('uid')
+        .equalTo(clerkUserId)
+        .once('value');
 
       if (!snapshot.exists()) {
-        console.log(`❌ No Firebase data found for user: ${clerkUserId}`);
+        console.log(`❌ No Firebase data for user: ${clerkUserId}`);
         return res.status(404).json({ error: 'User data not found in database' });
       }
 
       const snapshotVal = snapshot.val();
       const entryKey = Object.keys(snapshotVal)[0];
       const existingData = snapshotVal[entryKey];
+
+      console.log(`📝 Found entry: ${entryKey}`);
+
+      // Check for existing payment
       const existingPayment = existingData.stripePayment;
 
-      // Handle existing payments
-      if (existingPayment) {
-        console.log(`ℹ️ Existing payment found: ${existingPayment.paymentStatus}`);
+      // If payment already succeeded, return success
+      if (existingPayment?.paymentStatus === 'success') {
+        console.log(`✅ Payment already completed for ${entryKey}`);
+        return res.json({
+          success: true,
+          alreadyPaid: true,
+          paymentStatus: 'success',
+          entryKey
+        });
+      }
 
-        if (existingPayment.paymentStatus === 'success' && existingPayment.stripePaymentIntentId) {
-          try {
-            const existingIntent = await stripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
+      // Check cache for pending intent
+      if (pendingIntents.has(entryKey)) {
+        const cachedIntent = pendingIntents.get(entryKey);
+        console.log(`♻️ Using cached intent for ${entryKey}`);
+        return res.json({
+          success: true,
+          clientSecret: cachedIntent.client_secret,
+          entryKey,
+          reused: true
+        });
+      }
+
+      // Check for existing pending intent in Stripe
+      if (existingPayment?.stripePaymentIntentId && existingPayment.paymentStatus === 'pending') {
+        try {
+          const existingIntent = await stripe.paymentIntents.retrieve(
+            existingPayment.stripePaymentIntentId
+          );
+
+          if (existingIntent.status === 'requires_payment_method' ||
+              existingIntent.status === 'requires_confirmation') {
+            console.log(`♻️ Reusing existing Stripe intent: ${existingIntent.id}`);
+
+            pendingIntents.set(entryKey, existingIntent);
+
             return res.json({
               success: true,
               clientSecret: existingIntent.client_secret,
               entryKey,
-              alreadyPaid: true
+              reused: true
             });
-          } catch (e) {
-            console.log('⚠️ Existing intent not found, creating new one');
           }
-        }
-
-        if (existingPayment.paymentStatus === 'pending' && existingPayment.stripePaymentIntentId) {
-          try {
-            const existingIntent = await stripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
-            if (existingIntent.status === 'requires_payment_method' || existingIntent.status === 'requires_confirmation') {
-              console.log(`♻️ Reusing existing intent: ${existingPayment.stripePaymentIntentId}`);
-              return res.json({
-                success: true,
-                clientSecret: existingIntent.client_secret,
-                entryKey,
-                reused: true
-              });
-            }
-          } catch (e) {
-            console.log('⚠️ Existing intent invalid, creating new one');
-          }
+        } catch (e) {
+          console.log('⚠️ Existing intent invalid, creating new one');
         }
       }
 
       // Create new payment intent
-      console.log(`🆕 Creating new payment intent for ${entryKey}`);
+      console.log(`🆕 Creating new intent for ${entryKey}`);
       const paymentIntent = await stripe.paymentIntents.create({
         amount: Math.round(amount * 100),
         currency: 'usd',
         metadata: {
-          clerkUserId,
+          clerkUserId: clerkUserId,
           firebaseEntryKey: entryKey,
-          createdAt: Date.now().toString()
+          userEmail: clerkUser.emailAddresses?.[0]?.emailAddress || '',
+          createdAt: Date.now().toString(),
+          source: 'create_intent_api'
+        },
+        description: `Payment for user ${clerkUserId.substring(0, 8)}...`,
+        automatic_payment_methods: {
+          enabled: true,
         }
       });
 
-      // Update Firebase
+      console.log(`✅ Created intent: ${paymentIntent.id}`);
+
+      // Cache the intent
+      pendingIntents.set(entryKey, paymentIntent);
+
+      // Save to Firebase
       await db.ref(`Mainformdata/${entryKey}/stripePayment`).update({
         sessionId: `payment_${Date.now()}`,
         stripePaymentIntentId: paymentIntent.id,
         amount: amount,
         paymentStatus: 'pending',
         createdAt: Date.now(),
-        lastUpdated: Date.now()
+        lastUpdated: Date.now(),
+        metadata: {
+          clerkUserId,
+          intentCreatedAt: new Date().toISOString()
+        }
       });
 
       res.json({
         success: true,
         clientSecret: paymentIntent.client_secret,
-        entryKey
+        entryKey,
+        intentId: paymentIntent.id
       });
 
     } catch (error) {
       console.error('❌ Create intent error:', error);
-      res.status(500).json({ error: 'Payment setup failed', details: error.message });
+      res.status(500).json({
+        error: 'Payment setup failed',
+        details: error.message,
+        code: error.code
+      });
     }
     return;
   }
 
-  // 🔥 STATUS CHECK HANDLER (FIXED)
+  // ========== STATUS CHECK ==========
   if (req.method === 'GET') {
     try {
       const { clerkUserId } = req.query;
+
       if (!clerkUserId) {
-        return res.status(400).json({ paymentStatus: 'unknown' });
+        return res.status(400).json({
+          paymentStatus: 'invalid_request',
+          error: 'Missing clerkUserId parameter'
+        });
       }
 
-      console.log(`🔍 GET clerkUserId: "${clerkUserId}"`);
+      console.log(`🔍 Status check for: ${clerkUserId}`);
 
-      // 🔥 FIXED: Safe Clerk verification (non-blocking)
-      await safeClerkVerify(clerkUserId).catch(err => {
-        console.log('⚠️ Clerk check failed in status, continuing with Firebase...');
-      });
+      // Try to verify user, but don't fail if not found
+      let userValid = false;
+      try {
+        await clerkClient.users.getUser(clerkUserId);
+        userValid = true;
+      } catch (clerkError) {
+        console.warn(`⚠️ Clerk user verification failed: ${clerkUserId}`, clerkError.message);
+        // Continue anyway - user might be deleted but payment exists
+      }
 
-      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+      // Get payment data from Firebase
+      const snapshot = await db.ref('Mainformdata')
+        .orderByChild('uid')
+        .equalTo(clerkUserId)
+        .once('value');
 
       if (!snapshot.exists()) {
-        return res.json({ paymentStatus: 'no_data' });
+        return res.json({
+          paymentStatus: 'no_data',
+          userValid,
+          timestamp: Date.now()
+        });
       }
 
       const snapshotVal = snapshot.val();
       const entryKey = Object.keys(snapshotVal)[0];
       const data = snapshotVal[entryKey];
-      const paymentStatus = data.stripePayment?.paymentStatus || 'no_data';
+      const paymentData = data.stripePayment || {};
+
+      // If payment succeeded more than 5 minutes ago, consider it stale
+      const isStaleSuccess = paymentData.paymentStatus === 'success' &&
+        paymentData.processedAt &&
+        (Date.now() - paymentData.processedAt) > 5 * 60 * 1000;
 
       res.json({
-        paymentStatus,
-        paymentData: data.stripePayment || null,
-        entryKey
+        paymentStatus: paymentData.paymentStatus || 'no_data',
+        paymentData: {
+          ...paymentData,
+          isStale: isStaleSuccess
+        },
+        entryKey,
+        userValid,
+        timestamp: Date.now()
       });
+
     } catch (error) {
       console.error('❌ Status check error:', error);
-      // 🔥 FIXED: Don't fail status check on Clerk error
-      res.status(200).json({ paymentStatus: 'error', error: 'Status check failed' });
+      res.status(500).json({
+        paymentStatus: 'error',
+        error: error.message,
+        timestamp: Date.now()
+      });
     }
     return;
   }
