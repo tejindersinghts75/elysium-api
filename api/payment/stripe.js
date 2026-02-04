@@ -106,73 +106,84 @@ export default async function handler(req, res) {
     return;
   }
 
-  // CREATE INTENT (POST)
-  if (req.method === 'POST') {
-    try {
-      const body = await buffer(req);
-      const { clerkUserId, amount = 49.99 } = JSON.parse(body.toString());
+  // CREATE INTENT (POST) - UPDATED FOR ADDONS
+if (req.method === 'POST') {
+  try {
+    const body = await buffer(req);
+    const { clerkUserId, amount = 100, addons = [] } = JSON.parse(body.toString()); // 🔥 ADDONS SUPPORT
 
-      console.log(`🔍 POST clerkUserId: "${clerkUserId}"`);
+    console.log(`🔍 POST clerkUserId: "${clerkUserId}"`);
+    console.log(`💰 Total amount: $${amount}, Addons:`, addons); // 🔥 DEBUG
 
-      // Safe Clerk check (non-blocking)
-      await safeClerkVerify(clerkUserId).catch(() => {
-        console.log('⚠️ Skipping Clerk check');
-      });
+    // Safe Clerk check
+    await safeClerkVerify(clerkUserId).catch(() => {
+      console.log('⚠️ Skipping Clerk check');
+    });
 
-      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+    const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
 
-      if (!snapshot.exists()) {
-        return res.status(404).json({ error: 'No user data found' });
-      }
-
-      const snapshotVal = snapshot.val();
-      const entryKey = Object.keys(snapshotVal)[0];
-      const existingPayment = snapshotVal[entryKey]?.stripePayment;
-
-      // Reuse existing payment if valid
-      if (existingPayment?.paymentStatus === 'pending' && existingPayment.stripePaymentIntentId) {
-        try {
-          const intent = await stripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
-          if (['requires_payment_method', 'requires_confirmation'].includes(intent.status)) {
-            return res.json({
-              success: true,
-              clientSecret: intent.client_secret,
-              entryKey,
-              reused: true
-            });
-          }
-        } catch (e) {
-          console.log('⚠️ Invalid existing intent');
-        }
-      }
-
-      // Create new intent
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: Math.round(amount * 100),
-        currency: 'usd',
-        metadata: { clerkUserId, firebaseEntryKey: entryKey }
-      });
-
-      await db.ref(`Mainformdata/${entryKey}/stripePayment`).update({
-        sessionId: `payment_${Date.now()}`,
-        stripePaymentIntentId: paymentIntent.id,
-        amount,
-        paymentStatus: 'pending',
-        createdAt: Date.now()
-      });
-
-      res.json({
-        success: true,
-        clientSecret: paymentIntent.client_secret,
-        entryKey
-      });
-
-    } catch (error) {
-      console.error('❌ POST error:', error.message);
-      res.status(500).json({ error: 'Payment setup failed', details: error.message });
+    if (!snapshot.exists()) {
+      return res.status(404).json({ error: 'No user data found' });
     }
-    return;
+
+    const snapshotVal = snapshot.val();
+    const entryKey = Object.keys(snapshotVal)[0];
+    const existingPayment = snapshotVal[entryKey]?.stripePayment;
+
+    // Reuse existing payment if valid
+    if (existingPayment?.paymentStatus === 'pending' && existingPayment.stripePaymentIntentId) {
+      try {
+        const intent = await stripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
+        if (['requires_payment_method', 'requires_confirmation'].includes(intent.status)) {
+          return res.json({
+            success: true,
+            clientSecret: intent.client_secret,
+            entryKey,
+            reused: true
+          });
+        }
+      } catch (e) {
+        console.log('⚠️ Invalid existing intent');
+      }
+    }
+
+    // 🔥 CREATE INTENT WITH ADDONS METADATA
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(amount * 100), // 🔥 Frontend sends TOTAL
+      currency: 'usd',
+      metadata: {
+        clerkUserId,
+        firebaseEntryKey: entryKey,
+        addons: JSON.stringify(addons), // 🔥 Store addons list
+        baseAmount: 100,
+        addonTotal: amount - 100
+      }
+    });
+
+    await db.ref(`Mainformdata/${entryKey}/stripePayment`).update({
+      sessionId: `payment_${Date.now()}`,
+      stripePaymentIntentId: paymentIntent.id,
+      amount: amount, // 🔥 TOTAL amount
+      baseAmount: 100,
+      addonAmount: amount - 100,
+      addons: addons, // 🔥 Store in Firebase
+      paymentStatus: 'pending',
+      createdAt: Date.now()
+    });
+
+    res.json({
+      success: true,
+      clientSecret: paymentIntent.client_secret,
+      entryKey
+    });
+
+  } catch (error) {
+    console.error('❌ POST error:', error.message);
+    res.status(500).json({ error: 'Payment setup failed', details: error.message });
   }
+  return;
+}
+
 
   // STATUS CHECK (GET)
   if (req.method === 'GET') {
