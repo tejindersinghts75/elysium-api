@@ -19,7 +19,6 @@ export const config = {
   }
 };
 
-// 🔥 FIXED: Safe Clerk verification
 async function safeClerkVerify(clerkUserId) {
   try {
     await clerkClient.users.getUser(clerkUserId);
@@ -27,23 +26,32 @@ async function safeClerkVerify(clerkUserId) {
     return { valid: true };
   } catch (error) {
     if (error.clerkError && error.status === 404) {
-      console.log(`⚠️ Clerk user ${clerkUserId} not found - trusting Firebase data`);
-      return { valid: 'firebase_only' }; // Continue anyway
+      console.log(`⚠️ Clerk user ${clerkUserId} not found - trusting Firebase`);
+      return { valid: 'firebase_only' };
     }
-    console.error('❌ Real Clerk auth error:', error.message);
+    console.error('❌ Clerk error:', error.message);
     throw error;
   }
 }
 
 export default async function handler(req, res) {
-  // 🔥 FIXED: Better CORS
-  const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['https://yourdomain.com'];
-  const origin = req.headers.origin;
-  const corsOrigin = allowedOrigins.includes(origin) || allowedOrigins.includes('*') ? origin : allowedOrigins[0];
-
-  res.setHeader('Access-Control-Allow-Origin', corsOrigin);
-  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  // 🔥 FIXED CORS - SIMPLE & WORKING
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  // 🔥 HEALTH CHECK - TEST THIS FIRST
+  if (req.method === 'GET' && req.query.health) {
+    return res.json({
+      status: 'ok',
+      timestamp: Date.now(),
+      env: {
+        hasStripe: !!process.env.STRIPE_SECRET_KEY,
+        hasFirebase: !!process.env.FIREBASE_SERVICE_ACCOUNT,
+        hasClerk: !!process.env.CLERK_SECRET_KEY
+      }
+    });
+  }
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -52,30 +60,26 @@ export default async function handler(req, res) {
 
   const signature = req.headers['stripe-signature'];
 
-  // 🔥 WEBHOOK HANDLER (UNCHANGED - WORKING PERFECTLY)
+  // WEBHOOK HANDLER
   if (signature) {
     try {
       const body = await buffer(req);
       const event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET);
-
-      console.log(`🔔 Webhook received: ${event.type}`);
+      console.log(`🔔 Webhook: ${event.type}`);
 
       if (event.type === 'payment_intent.succeeded') {
         const paymentIntent = event.data.object;
         const { firebaseEntryKey } = paymentIntent.metadata;
 
         if (firebaseEntryKey) {
-          console.log(`✅ Webhook success for entry: ${firebaseEntryKey}`);
-
           await db.ref(`Mainformdata/${firebaseEntryKey}/stripePayment`).update({
             paymentStatus: 'success',
-            stripeChargeId: paymentIntent.latest_charge || paymentIntent.charges?.data?.[0]?.id,
+            stripeChargeId: paymentIntent.latest_charge,
             processedAt: Date.now(),
             stripePaymentIntentId: paymentIntent.id,
             lastWebhookEvent: 'payment_intent.succeeded'
           });
-
-          console.log(`📝 Firebase updated for ${firebaseEntryKey}`);
+          console.log(`✅ Webhook success: ${firebaseEntryKey}`);
         }
       }
 
@@ -84,14 +88,13 @@ export default async function handler(req, res) {
         const { firebaseEntryKey } = paymentIntent.metadata;
 
         if (firebaseEntryKey) {
-          console.log(`❌ Webhook failed for entry: ${firebaseEntryKey}`);
-
           await db.ref(`Mainformdata/${firebaseEntryKey}/stripePayment`).update({
             paymentStatus: 'failed',
             error: paymentIntent.last_payment_error?.message || 'Payment failed',
             processedAt: Date.now(),
             lastWebhookEvent: 'payment_intent.payment_failed'
           });
+          console.log(`❌ Webhook failed: ${firebaseEntryKey}`);
         }
       }
 
@@ -103,92 +106,59 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 🔥 CREATE INTENT HANDLER (FIXED)
+  // CREATE INTENT (POST)
   if (req.method === 'POST') {
     try {
       const body = await buffer(req);
-      const bodyString = body.toString();
-      const { clerkUserId, amount = 49.99 } = JSON.parse(bodyString);
+      const { clerkUserId, amount = 49.99 } = JSON.parse(body.toString());
 
-      // 🔥 DEBUG LOGS
-      console.log(`🔍 RAW clerkUserId RECEIVED: "${clerkUserId}"`);
-      console.log(`🔍 RAW body:`, bodyString);
+      console.log(`🔍 POST clerkUserId: "${clerkUserId}"`);
 
-      // 🔥 FIXED: Safe Clerk verification
-      const clerkStatus = await safeClerkVerify(clerkUserId);
-      if (clerkStatus.valid === false) {
-        return res.status(401).json({ error: 'Invalid user' });
-      }
+      // Safe Clerk check (non-blocking)
+      await safeClerkVerify(clerkUserId).catch(() => {
+        console.log('⚠️ Skipping Clerk check');
+      });
 
-      // Check for existing user data in Firebase
       const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
 
       if (!snapshot.exists()) {
-        console.log(`❌ No Firebase data found for user: ${clerkUserId}`);
-        return res.status(404).json({ error: 'User data not found in database' });
+        return res.status(404).json({ error: 'No user data found' });
       }
 
       const snapshotVal = snapshot.val();
       const entryKey = Object.keys(snapshotVal)[0];
-      const existingData = snapshotVal[entryKey];
-      const existingPayment = existingData.stripePayment;
+      const existingPayment = snapshotVal[entryKey]?.stripePayment;
 
-      // Handle existing payments
-      if (existingPayment) {
-        console.log(`ℹ️ Existing payment found: ${existingPayment.paymentStatus}`);
-
-        if (existingPayment.paymentStatus === 'success' && existingPayment.stripePaymentIntentId) {
-          try {
-            const existingIntent = await stripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
+      // Reuse existing payment if valid
+      if (existingPayment?.paymentStatus === 'pending' && existingPayment.stripePaymentIntentId) {
+        try {
+          const intent = await stripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
+          if (['requires_payment_method', 'requires_confirmation'].includes(intent.status)) {
             return res.json({
               success: true,
-              clientSecret: existingIntent.client_secret,
+              clientSecret: intent.client_secret,
               entryKey,
-              alreadyPaid: true
+              reused: true
             });
-          } catch (e) {
-            console.log('⚠️ Existing intent not found, creating new one');
           }
-        }
-
-        if (existingPayment.paymentStatus === 'pending' && existingPayment.stripePaymentIntentId) {
-          try {
-            const existingIntent = await stripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
-            if (existingIntent.status === 'requires_payment_method' || existingIntent.status === 'requires_confirmation') {
-              console.log(`♻️ Reusing existing intent: ${existingPayment.stripePaymentIntentId}`);
-              return res.json({
-                success: true,
-                clientSecret: existingIntent.client_secret,
-                entryKey,
-                reused: true
-              });
-            }
-          } catch (e) {
-            console.log('⚠️ Existing intent invalid, creating new one');
-          }
+        } catch (e) {
+          console.log('⚠️ Invalid existing intent');
         }
       }
 
-      // Create new payment intent
-      console.log(`🆕 Creating new payment intent for ${entryKey}`);
+      // Create new intent
       const paymentIntent = await stripe.paymentIntents.create({
         amount: Math.round(amount * 100),
         currency: 'usd',
-        metadata: {
-          clerkUserId,
-          firebaseEntryKey: entryKey,
-          createdAt: Date.now().toString()
-        }
+        metadata: { clerkUserId, firebaseEntryKey: entryKey }
       });
 
-      // Update Firebase
       await db.ref(`Mainformdata/${entryKey}/stripePayment`).update({
         sessionId: `payment_${Date.now()}`,
         stripePaymentIntentId: paymentIntent.id,
-        amount: amount,
+        amount,
         paymentStatus: 'pending',
-        createdAt: Date.now(),
-        lastUpdated: Date.now()
+        createdAt: Date.now()
       });
 
       res.json({
@@ -198,26 +168,21 @@ export default async function handler(req, res) {
       });
 
     } catch (error) {
-      console.error('❌ Create intent error:', error);
+      console.error('❌ POST error:', error.message);
       res.status(500).json({ error: 'Payment setup failed', details: error.message });
     }
     return;
   }
 
-  // 🔥 STATUS CHECK HANDLER (FIXED)
+  // STATUS CHECK (GET)
   if (req.method === 'GET') {
     try {
       const { clerkUserId } = req.query;
+      console.log(`🔍 GET clerkUserId: "${clerkUserId}"`);
+
       if (!clerkUserId) {
         return res.status(400).json({ paymentStatus: 'unknown' });
       }
-
-      console.log(`🔍 GET clerkUserId: "${clerkUserId}"`);
-
-      // 🔥 FIXED: Safe Clerk verification (non-blocking)
-      await safeClerkVerify(clerkUserId).catch(err => {
-        console.log('⚠️ Clerk check failed in status, continuing with Firebase...');
-      });
 
       const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
 
@@ -227,18 +192,16 @@ export default async function handler(req, res) {
 
       const snapshotVal = snapshot.val();
       const entryKey = Object.keys(snapshotVal)[0];
-      const data = snapshotVal[entryKey];
-      const paymentStatus = data.stripePayment?.paymentStatus || 'no_data';
+      const paymentStatus = snapshotVal[entryKey]?.stripePayment?.paymentStatus || 'no_data';
 
       res.json({
         paymentStatus,
-        paymentData: data.stripePayment || null,
+        paymentData: snapshotVal[entryKey]?.stripePayment || null,
         entryKey
       });
     } catch (error) {
-      console.error('❌ Status check error:', error);
-      // 🔥 FIXED: Don't fail status check on Clerk error
-      res.status(200).json({ paymentStatus: 'error', error: 'Status check failed' });
+      console.error('❌ GET error:', error.message);
+      res.status(200).json({ paymentStatus: 'error' });
     }
     return;
   }
