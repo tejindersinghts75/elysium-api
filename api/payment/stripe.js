@@ -15,7 +15,7 @@ const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY 
 
 export const config = {
   api: {
-    bodyParser: false
+    bodyParser: false // Required for webhook
   }
 };
 
@@ -29,17 +29,19 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 🔥 WEBHOOK - Always needs raw body
   const signature = req.headers['stripe-signature'];
+
+  // 🔥 WEBHOOK (raw body - NO BUFFER until signature confirmed)
   if (signature) {
     try {
-      const body = await buffer(req);
+      const body = await buffer(req); // ✅ Buffer ONLY for webhook
       const event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET);
 
       if (event.type === 'payment_intent.succeeded') {
         const paymentIntent = event.data.object;
         const { firebaseEntryKey } = paymentIntent.metadata;
         if (firebaseEntryKey) {
+          console.log(`✅ Webhook success: ${firebaseEntryKey}`);
           await db.ref(`Mainformdata/${firebaseEntryKey}`).update({
             'stripePayment.paymentStatus': 'success',
             'stripePayment.stripeChargeId': paymentIntent.charges.data[0]?.id,
@@ -52,6 +54,7 @@ export default async function handler(req, res) {
         const paymentIntent = event.data.object;
         const { firebaseEntryKey } = paymentIntent.metadata;
         if (firebaseEntryKey) {
+          console.log(`❌ Webhook failed: ${firebaseEntryKey}`);
           await db.ref(`Mainformdata/${firebaseEntryKey}`).update({
             'stripePayment.paymentStatus': 'failed',
             'stripePayment.error': paymentIntent.last_payment_error?.message,
@@ -68,10 +71,10 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 🔥 CREATE PAYMENT INTENT (POST only)
+  // 🔥 CREATE INTENT (buffer only for POST)
   if (req.method === 'POST') {
     try {
-      const body = await buffer(req);
+      const body = await buffer(req); // ✅ Buffer ONLY for POST
       const bodyString = body.toString();
       const { clerkUserId, amount = 49.99 } = JSON.parse(bodyString);
 
@@ -82,8 +85,9 @@ export default async function handler(req, res) {
         return res.status(404).json({ error: 'User data not found' });
       }
 
-      let entryKey = null;
-      snapshot.forEach(child => { entryKey = child.key; });
+      // ✅ FIX: Get FIRST entry only (no random forEach)
+      const snapshotVal = snapshot.val();
+      const entryKey = Object.keys(snapshotVal)[0];
 
       const paymentIntent = await stripe.paymentIntents.create({
         amount: Math.round(amount * 100),
@@ -101,19 +105,20 @@ export default async function handler(req, res) {
         }
       });
 
+      console.log(`Created intent ${paymentIntent.id} for ${entryKey}`);
       res.json({
         success: true,
         clientSecret: paymentIntent.client_secret,
         entryKey
       });
     } catch (error) {
-      console.error('Stripe create error:', error);
+      console.error('Create intent error:', error);
       res.status(500).json({ error: 'Payment setup failed' });
     }
     return;
   }
 
-  // 🔥 STATUS CHECK (GET only - NO BUFFERING!)
+  // 🔥 STATUS CHECK (no body needed)
   if (req.method === 'GET') {
     try {
       const { clerkUserId } = req.query;
@@ -128,15 +133,11 @@ export default async function handler(req, res) {
         return res.json({ paymentStatus: 'no_data' });
       }
 
-      let paymentStatus = 'no_data';
-      snapshot.forEach(child => {
-        const data = child.val();
-        if (data.stripePayment?.paymentStatus === 'success') {
-          paymentStatus = 'success';
-        } else if (data.stripePayment?.paymentStatus === 'failed') {
-          paymentStatus = 'failed';
-        }
-      });
+      // ✅ FIX: Check FIRST entry only
+      const snapshotVal = snapshot.val();
+      const entryKey = Object.keys(snapshotVal)[0];
+      const data = snapshotVal[entryKey];
+      const paymentStatus = data.stripePayment?.paymentStatus || 'no_data';
 
       res.json({ paymentStatus });
     } catch (error) {
