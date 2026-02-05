@@ -117,8 +117,8 @@ if (req.method === 'POST') {
     console.log(`🔍 POST: User ${clerkUserId}, Addons:`, addons);
 
     // 🔥 SIMPLE PRICE CONFIG - CHANGE HERE WHEN NEEDED
-    const BASE_PRICE = 100;  // Base product price
-    const ADDON_PRICE = 100;  // Addon price
+    const BASE_PRICE = 2;  // Base product price
+    const ADDON_PRICE = 1;  // Addon price
 
     // 🔥 SIMPLE CALCULATION - NO TRUSTING CLIENT
     const hasAddon = addons.length > 0;
@@ -151,7 +151,7 @@ if (req.method === 'POST') {
         const canUpdate = ['requires_payment_method', 'requires_confirmation', 'requires_action'].includes(paymentIntent.status);
 
         if (canUpdate) {
-          const existingAmount = paymentIntent.amount / 100;
+          const existingAmount = paymentIntent.amount / 2;
 
           if (existingAmount === totalAmount) {
             intentAction = 'reused';
@@ -166,7 +166,7 @@ if (req.method === 'POST') {
             paymentIntent = await stripe.paymentIntents.update(
               existingPayment.stripePaymentIntentId,
               {
-                amount: Math.round(totalAmount * 100),
+                amount: Math.round(totalAmount * 2),
                 metadata: {
                   clerkUserId: existingMetadata.clerkUserId || clerkUserId,
                   firebaseEntryKey: existingMetadata.firebaseEntryKey || entryKey,
@@ -202,7 +202,7 @@ if (req.method === 'POST') {
     if (!paymentIntent) {
       intentAction = 'created';
       paymentIntent = await stripe.paymentIntents.create({
-        amount: Math.round(totalAmount * 100),
+        amount: Math.round(totalAmount * 2),
         currency: 'usd',
         metadata: {
           clerkUserId,
