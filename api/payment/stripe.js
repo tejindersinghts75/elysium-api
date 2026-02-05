@@ -107,13 +107,24 @@ export default async function handler(req, res) {
   }
 
   // CREATE INTENT (POST) - UPDATED FOR ADDONS
-// 🔥 ENHANCED POST HANDLER WITH PROPER UPDATE LOGIC
+  // 🔥 ENHANCED POST HANDLER WITH PROPER UPDATE LOGIC
+  // CREATE INTENT (POST) - SIMPLE & SECURE
 if (req.method === 'POST') {
   try {
     const body = await buffer(req);
-    const { clerkUserId, amount = 100, addons = [] } = JSON.parse(body.toString());
+    const { clerkUserId, addons = [] } = JSON.parse(body.toString()); // 🔥 REMOVE amount parameter!
 
-    console.log(`🔍 POST: User ${clerkUserId}, Amount: $${amount}, Addons:`, addons);
+    console.log(`🔍 POST: User ${clerkUserId}, Addons:`, addons);
+
+    // 🔥 SIMPLE PRICE CONFIG - CHANGE HERE WHEN NEEDED
+    const BASE_PRICE = 100;  // Base product price
+    const ADDON_PRICE = 29.95;  // Addon price
+
+    // 🔥 SIMPLE CALCULATION - NO TRUSTING CLIENT
+    const hasAddon = addons.length > 0;
+    const totalAmount = BASE_PRICE + (hasAddon ? ADDON_PRICE : 0);
+
+    console.log(`💰 Calculated amount: $${totalAmount} (Base: $${BASE_PRICE} + Addon: $${hasAddon ? ADDON_PRICE : 0})`);
 
     // Safe Clerk check
     await safeClerkVerify(clerkUserId).catch(() => {
@@ -142,32 +153,36 @@ if (req.method === 'POST') {
         if (canUpdate) {
           const existingAmount = paymentIntent.amount / 100;
 
-          if (existingAmount === amount) {
+          if (existingAmount === totalAmount) {
             intentAction = 'reused';
-            console.log(`✅ Reusing PaymentIntent (same amount: $${amount})`);
+            console.log(`✅ Reusing PaymentIntent (same amount: $${totalAmount})`);
           } else {
             intentAction = 'updated';
-            console.log(`🔄 Updating PaymentIntent: $${existingAmount} → $${amount}`);
+            console.log(`🔄 Updating PaymentIntent: $${existingAmount} → $${totalAmount}`);
 
-            // FIXED: Proper metadata handling
             const existingMetadata = paymentIntent.metadata || {};
             const existingHistory = JSON.parse(existingMetadata.history || '[]');
 
             paymentIntent = await stripe.paymentIntents.update(
               existingPayment.stripePaymentIntentId,
               {
-                amount: Math.round(amount * 100),
+                amount: Math.round(totalAmount * 100),
                 metadata: {
                   clerkUserId: existingMetadata.clerkUserId || clerkUserId,
                   firebaseEntryKey: existingMetadata.firebaseEntryKey || entryKey,
                   createdAt: existingMetadata.createdAt || new Date().toISOString(),
                   addons: JSON.stringify(addons),
-                  baseAmount: '100',
-                  addonTotal: String(amount - 100),
+                  baseAmount: String(BASE_PRICE),
+                  addonTotal: String(hasAddon ? ADDON_PRICE : 0),
                   updatedAt: new Date().toISOString(),
                   history: JSON.stringify([
                     ...existingHistory,
-                    { timestamp: new Date().toISOString(), fromAmount: existingAmount, toAmount: amount, addons }
+                    {
+                      timestamp: new Date().toISOString(),
+                      fromAmount: existingAmount,
+                      toAmount: totalAmount,
+                      addons
+                    }
                   ])
                 }
               }
@@ -187,28 +202,33 @@ if (req.method === 'POST') {
     if (!paymentIntent) {
       intentAction = 'created';
       paymentIntent = await stripe.paymentIntents.create({
-        amount: Math.round(amount * 100),
+        amount: Math.round(totalAmount * 100),
         currency: 'usd',
         metadata: {
           clerkUserId,
           firebaseEntryKey: entryKey,
           addons: JSON.stringify(addons),
-          baseAmount: '100',
-          addonTotal: String(amount - 100),
+          baseAmount: String(BASE_PRICE),
+          addonTotal: String(hasAddon ? ADDON_PRICE : 0),
           createdAt: new Date().toISOString(),
-          history: JSON.stringify([{ timestamp: new Date().toISOString(), action: 'created', amount, addons }])
+          history: JSON.stringify([{
+            timestamp: new Date().toISOString(),
+            action: 'created',
+            amount: totalAmount,
+            addons
+          }])
         }
       });
-      console.log(`🚀 Created new PaymentIntent: $${amount}`);
+      console.log(`🚀 Created new PaymentIntent: $${totalAmount}`);
     }
 
     // Update Firebase
     await db.ref(`Mainformdata/${entryKey}/stripePayment`).update({
       sessionId: `payment_${Date.now()}`,
       stripePaymentIntentId: paymentIntent.id,
-      amount: amount,
-      baseAmount: 100,
-      addonAmount: amount - 100,
+      amount: totalAmount,
+      baseAmount: BASE_PRICE,
+      addonAmount: hasAddon ? ADDON_PRICE : 0,
       addons: addons,
       paymentStatus: 'pending',
       lastUpdated: Date.now(),
@@ -221,7 +241,7 @@ if (req.method === 'POST') {
       clientSecret: paymentIntent.client_secret,
       entryKey,
       intentAction,
-      amount,
+      amount: totalAmount,  // 🔥 Send back YOUR calculated amount
       addons
     });
 
