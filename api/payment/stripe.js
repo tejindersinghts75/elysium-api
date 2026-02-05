@@ -107,13 +107,13 @@ export default async function handler(req, res) {
   }
 
   // CREATE INTENT (POST) - UPDATED FOR ADDONS
+// 🔥 ENHANCED POST HANDLER WITH PROPER UPDATE LOGIC
 if (req.method === 'POST') {
   try {
     const body = await buffer(req);
-    const { clerkUserId, amount = 100, addons = [] } = JSON.parse(body.toString()); // 🔥 ADDONS SUPPORT
+    const { clerkUserId, amount = 100, addons = [] } = JSON.parse(body.toString());
 
-    console.log(`🔍 POST clerkUserId: "${clerkUserId}"`);
-    console.log(`💰 Total amount: $${amount}, Addons:`, addons); // 🔥 DEBUG
+    console.log(`🔍 POST: User ${clerkUserId}, Amount: $${amount}, Addons:`, addons);
 
     // Safe Clerk check
     await safeClerkVerify(clerkUserId).catch(() => {
@@ -121,7 +121,6 @@ if (req.method === 'POST') {
     });
 
     const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
-
     if (!snapshot.exists()) {
       return res.status(404).json({ error: 'No user data found' });
     }
@@ -130,51 +129,100 @@ if (req.method === 'POST') {
     const entryKey = Object.keys(snapshotVal)[0];
     const existingPayment = snapshotVal[entryKey]?.stripePayment;
 
-    // Reuse existing payment if valid
-    if (existingPayment?.paymentStatus === 'pending' && existingPayment.stripePaymentIntentId) {
+    let paymentIntent;
+    let intentAction = 'created';
+
+    // Check for existing valid PaymentIntent
+    if (existingPayment?.stripePaymentIntentId) {
       try {
-        const intent = await stripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
-        if (['requires_payment_method', 'requires_confirmation'].includes(intent.status)) {
-          return res.json({
-            success: true,
-            clientSecret: intent.client_secret,
-            entryKey,
-            reused: true
-          });
+        paymentIntent = await stripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
+
+        const canUpdate = ['requires_payment_method', 'requires_confirmation', 'requires_action'].includes(paymentIntent.status);
+
+        if (canUpdate) {
+          const existingAmount = paymentIntent.amount / 100;
+
+          if (existingAmount === amount) {
+            intentAction = 'reused';
+            console.log(`✅ Reusing PaymentIntent (same amount: $${amount})`);
+          } else {
+            intentAction = 'updated';
+            console.log(`🔄 Updating PaymentIntent: $${existingAmount} → $${amount}`);
+
+            // FIXED: Proper metadata handling
+            const existingMetadata = paymentIntent.metadata || {};
+            const existingHistory = JSON.parse(existingMetadata.history || '[]');
+
+            paymentIntent = await stripe.paymentIntents.update(
+              existingPayment.stripePaymentIntentId,
+              {
+                amount: Math.round(amount * 100),
+                metadata: {
+                  clerkUserId: existingMetadata.clerkUserId || clerkUserId,
+                  firebaseEntryKey: existingMetadata.firebaseEntryKey || entryKey,
+                  createdAt: existingMetadata.createdAt || new Date().toISOString(),
+                  addons: JSON.stringify(addons),
+                  baseAmount: '100',
+                  addonTotal: String(amount - 100),
+                  updatedAt: new Date().toISOString(),
+                  history: JSON.stringify([
+                    ...existingHistory,
+                    { timestamp: new Date().toISOString(), fromAmount: existingAmount, toAmount: amount, addons }
+                  ])
+                }
+              }
+            );
+          }
+        } else {
+          console.log(`⚠️ Existing intent in state: ${paymentIntent.status}, creating new`);
+          paymentIntent = null;
         }
-      } catch (e) {
-        console.log('⚠️ Invalid existing intent');
+      } catch (error) {
+        console.log('⚠️ Error retrieving existing intent:', error.message);
+        paymentIntent = null;
       }
     }
 
-    // 🔥 CREATE INTENT WITH ADDONS METADATA
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(amount * 100), // 🔥 Frontend sends TOTAL
-      currency: 'usd',
-      metadata: {
-        clerkUserId,
-        firebaseEntryKey: entryKey,
-        addons: JSON.stringify(addons), // 🔥 Store addons list
-        baseAmount: 100,
-        addonTotal: amount - 100
-      }
-    });
+    // Create new if needed
+    if (!paymentIntent) {
+      intentAction = 'created';
+      paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(amount * 100),
+        currency: 'usd',
+        metadata: {
+          clerkUserId,
+          firebaseEntryKey: entryKey,
+          addons: JSON.stringify(addons),
+          baseAmount: '100',
+          addonTotal: String(amount - 100),
+          createdAt: new Date().toISOString(),
+          history: JSON.stringify([{ timestamp: new Date().toISOString(), action: 'created', amount, addons }])
+        }
+      });
+      console.log(`🚀 Created new PaymentIntent: $${amount}`);
+    }
 
+    // Update Firebase
     await db.ref(`Mainformdata/${entryKey}/stripePayment`).update({
       sessionId: `payment_${Date.now()}`,
       stripePaymentIntentId: paymentIntent.id,
-      amount: amount, // 🔥 TOTAL amount
+      amount: amount,
       baseAmount: 100,
       addonAmount: amount - 100,
-      addons: addons, // 🔥 Store in Firebase
+      addons: addons,
       paymentStatus: 'pending',
-      createdAt: Date.now()
+      lastUpdated: Date.now(),
+      intentAction: intentAction,
+      ...(intentAction === 'created' && { createdAt: Date.now() })
     });
 
     res.json({
       success: true,
       clientSecret: paymentIntent.client_secret,
-      entryKey
+      entryKey,
+      intentAction,
+      amount,
+      addons
     });
 
   } catch (error) {
@@ -183,7 +231,6 @@ if (req.method === 'POST') {
   }
   return;
 }
-
 
   // STATUS CHECK (GET)
   if (req.method === 'GET') {
