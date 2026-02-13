@@ -97,8 +97,12 @@ export default async function handler(req, res) {
       });
       const captchaData = await captchaRes.json();
       if (!captchaData.success) {
+        if (process.env.GOOGLE_SHEETS_URL) {
+          await sendToSheets({ formType: "captcha_fail", email: emailLower, ip, status: 'captcha_error' });
+        }
         return res.status(400).json({ error: 'Invalid CAPTCHA' });
       }
+
     }
 
     // 3. BASIC VALIDATION
