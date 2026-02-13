@@ -15,30 +15,6 @@ const clerkClient = createClerkClient({
   secretKey: process.env.CLERK_SECRET_KEY,
 });
 
-// Add these 13 lines RIGHT HERE (line 16-28)
-let sheetsQueue = [];
-let processing = false;
-
-async function sendToSheets(data) {
-  sheetsQueue.push(data);
-  if (!processing) {
-    processing = true;
-    while (sheetsQueue.length > 0) {
-      const item = sheetsQueue.shift();
-      try {
-        await fetch(process.env.GOOGLE_SHEETS_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(item)
-        });
-        await new Promise(r => setTimeout(r, 1000));  // 1 second delay
-      } catch (e) { console.error('Sheets failed:', e); }
-    }
-    processing = false;
-  }
-}
-
-
 export default async function handler(req, res) {
   // 🔥 CORS HEADERS FIRST
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -67,7 +43,7 @@ export default async function handler(req, res) {
       body[key] = fields[key][0] || fields[key];
     }
 
-    let {
+    let{
       name, email, mobile, selectedCity, profession, income, household, why,
       captchaToken, referredBy, referralId
     } = body;
@@ -97,12 +73,8 @@ export default async function handler(req, res) {
       });
       const captchaData = await captchaRes.json();
       if (!captchaData.success) {
-        if (process.env.GOOGLE_SHEETS_URL) {
-          await sendToSheets({ formType: "captcha_fail", email: emailLower, ip, status: 'captcha_error' });
-        }
         return res.status(400).json({ error: 'Invalid CAPTCHA' });
       }
-
     }
 
     // 3. BASIC VALIDATION
@@ -262,13 +234,6 @@ export default async function handler(req, res) {
           });
 
           console.log('✅ UPDATE MODE COMPLETE!');
-          // ADD these 3 lines RIGHT HERE:
-          if (process.env.GOOGLE_SHEETS_URL) {
-            await sendToSheets({
-              formType: "formmodal_update", timestamp: new Date().toISOString(), ip,
-              name: name.trim(), email: emailLower, mobile, status: 'update', userId: existingClerkUserId
-            });
-          }
           return res.json({
             success: true,
             mode: 'update',
@@ -383,12 +348,30 @@ export default async function handler(req, res) {
     }
 
     // Google Sheets
-    await sendToSheets({
-      formType: "formmodal", timestamp: new Date().toISOString(), ip,
-      name: name.trim(), email: emailLower, mobile, selectedCity: selectedCity || 'Not selected',
-      profession: profession || '', income: income || 'Not selected', household: household || 'Not selected',
-      why: why?.trim() || '', referredBy: referredBy || '', referralId: referralId || '', clerkUserId: userId, status: 'success'
-    });
+    if (process.env.GOOGLE_SHEETS_URL) {
+      const sheetsData = {
+        formType: "formmodal",
+        timestamp: new Date().toISOString(),
+        ip,
+        name: name.trim(),
+        email: emailLower,
+        mobile: mobile,
+        selectedCity: selectedCity || 'Not selected',
+        profession: profession || '',
+        income: income || 'Not selected',
+        household: household || 'Not selected',
+        why: why?.trim() || '',
+        referredBy: referredBy || '',
+        referralId: referralId || '',
+        clerkUserId: userId,
+        status: 'success'
+      };
+      fetch(process.env.GOOGLE_SHEETS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sheetsData)
+      }).catch(console.error);
+    }
 
     console.log(`✅ FULL SUCCESS: ${userId} (${ip}) in ${Date.now() - startTime}ms`);
 
@@ -417,9 +400,17 @@ export default async function handler(req, res) {
     console.error('💥 CRITICAL ERROR:', error);
 
     if (process.env.GOOGLE_SHEETS_URL) {
-      await sendToSheets({
-        formType: "formmodal", timestamp: new Date().toISOString(), ip, status: 'error', error: error.message
-      });
+      fetch(process.env.GOOGLE_SHEETS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          formType: "formmodal",
+          timestamp: new Date().toISOString(),
+          ip,
+          status: 'error',
+          error: error.message
+        })
+      }).catch(console.error);
     }
 
     res.status(500).json({ error: 'Internal server error' });
