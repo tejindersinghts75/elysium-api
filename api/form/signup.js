@@ -7,7 +7,7 @@ const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
   credential: cert(serviceAccount),
   //databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/"
-  databaseURL:process.env.FIREBASE_URL
+  databaseURL: process.env.FIREBASE_URL
 });
 const db = getDatabase(app);
 
@@ -43,10 +43,14 @@ export default async function handler(req, res) {
       body[key] = fields[key][0] || fields[key];
     }
 
-    const {
+    let{
       name, email, mobile, selectedCity, profession, income, household, why,
       captchaToken, referredBy, referralId
     } = body;
+    // ✅ NORMALIZE MOBILE ONCE (VERY IMPORTANT)
+    if (Array.isArray(mobile)) mobile = mobile[0];
+    if (mobile === undefined || mobile === null) mobile = '';
+    mobile = String(mobile).trim();
 
     console.log('📥 Form data:', { name, email, captchaToken: captchaToken ? '✓' : '✗' });
 
@@ -128,7 +132,7 @@ export default async function handler(req, res) {
           await db.ref(`Mainformdata/${targetEntryKey}`).update({
             name: name.trim(),
             email: emailLower,
-            mobile: mobile?.trim() || '',
+            mobile: mobile,
             selectedCity: selectedCity || '',
             profession: profession || '',
             income: income || '',
@@ -225,7 +229,7 @@ export default async function handler(req, res) {
             firstname: firstName,
             lastname: lastName,
             email: emailLower,
-            mobile: mobile?.trim() || '',
+            mobile: mobile,
             updatedAt: Date.now()
           });
 
@@ -272,7 +276,7 @@ export default async function handler(req, res) {
         password: randomPassword,
         skipEmailVerification: true,
         unsafeMetadata: {
-          mobile: mobile?.trim() || '',
+          mobile: mobile,
           selectedCity: selectedCity || 'Not selected',
           profession: profession || '',
           income: income || 'Not selected',
@@ -297,7 +301,7 @@ export default async function handler(req, res) {
         uid: userId,
         name: name.trim(),
         email: emailLower,
-        mobile: mobile?.trim() || '',
+        mobile: mobile,
         selectedCity: selectedCity || '',
         profession: profession || '',
         income: income || '',
@@ -310,7 +314,7 @@ export default async function handler(req, res) {
         firstname: firstName,
         lastname: lastName,
         email: emailLower,
-        mobile: mobile?.trim() || '',
+        mobile: mobile,
         createdAt: Date.now()
       })
     ]);
@@ -329,7 +333,7 @@ export default async function handler(req, res) {
             db.ref(`Mainformdata/${referrerKey}/referrals/${referralId}`).update({
               name: name.trim(),
               email: emailLower,
-              mobile: mobile?.trim() || '',
+              mobile: mobile,
               status: 'completed',
               completedAt: Date.now()
             })
@@ -351,7 +355,7 @@ export default async function handler(req, res) {
         ip,
         name: name.trim(),
         email: emailLower,
-        mobile: mobile?.trim() || '',
+        mobile: mobile,
         selectedCity: selectedCity || 'Not selected',
         profession: profession || '',
         income: income || 'Not selected',
