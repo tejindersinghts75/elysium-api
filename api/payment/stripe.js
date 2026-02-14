@@ -175,6 +175,7 @@ export default async function handler(req, res) {
                 existingPayment.stripePaymentIntentId,
                 {
                   amount: Math.round(totalAmount * 100),
+                   payment_method_types: ['card', 'apple_pay', 'amazon_pay'],
                   metadata: {
                     clerkUserId: existingMetadata.clerkUserId || clerkUserId,
                     firebaseEntryKey: existingMetadata.firebaseEntryKey || entryKey,
@@ -212,6 +213,7 @@ export default async function handler(req, res) {
         paymentIntent = await stripe.paymentIntents.create({
           amount: Math.round(totalAmount * 100),
           currency: 'usd',
+          payment_method_types: ['card', 'apple_pay', 'amazon_pay'],
           metadata: {
             clerkUserId,
             firebaseEntryKey: entryKey,
