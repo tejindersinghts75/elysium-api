@@ -109,7 +109,7 @@ export default async function handler(req, res) {
   if (req.method === 'GET' && req.query.pricing) {
     return res.json({
       prices: {
-        base: 100.00,      // Dollars → backend *100 → cents
+        base: 99.00,      // Dollars → backend *100 → cents
         addon: 29.95
       }
     });
@@ -125,7 +125,7 @@ export default async function handler(req, res) {
       console.log(`🔍 POST: User ${clerkUserId}, Addons:`, addons);
 
       // 🔥 SIMPLE PRICE CONFIG - CHANGE HERE WHEN NEEDED
-      const BASE_PRICE = 100.00;     // $100.00 → 10000 cents
+      const BASE_PRICE = 99.00;     // $100.00 → 10000 cents
       const ADDON_PRICE = 29.95;     // $29.95 → 2995 cents
 
       // 🔥 SIMPLE CALCULATION - NO TRUSTING CLIENT
