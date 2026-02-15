@@ -20,64 +20,50 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'GET') {
-    try {
-      const snapshot = await db.ref('Mainformdata').once('value');
-      const data = snapshot.val() || {};
+    const snapshot = await db.ref('Mainformdata').once('value');
+    const data = snapshot.val() || {};
 
-      const users = Object.entries(data).map(([id, user]) => ({
-        id,
-        name: user.name || '',
-        email: user.email || '',
-        mobile: user.mobile || '',
-        isFounder: (user.isFounder == 1 || user.isFounder === true)  // Handle both
-      }));
+    const users = Object.entries(data).map(([id, user]) => ({
+      id,
+      name: user.name || '',
+      email: user.email || '',
+      mobile: user.mobile || '',
+      isFounder: user.isFounder === 'true'  // 🔥 STRING → BOOLEAN
+    }));
 
-      res.json(users);
-    } catch (error) {
-      console.error('GET error:', error);
-      res.status(500).json({ error: 'Server error' });
-    }
+    res.json(users);
     return;
   }
 
   if (req.method === 'PATCH') {
-    try {
-      const form = formidable({ multiples: false });
-      const [fields] = await form.parse(req);
+    const form = formidable({ multiples: false });
+    const [fields] = await form.parse(req);
 
-      const userId = Array.isArray(fields.userId) ? fields.userId[0] : fields.userId;
-      const setFounder = fields.isFounder === 'true';
+    const userId = Array.isArray(fields.userId) ? fields.userId[0] : fields.userId;
+    const isFounderString = fields.isFounder;  // "true" or "false"
 
-      if (!userId) {
-        return res.status(400).json({ error: 'userId required' });
-      }
-
-      // 🔥 FULL READ → MODIFY → WRITE (Bulletproof)
-      const snapshot = await db.ref(`Mainformdata/${userId}`).once('value');
-      const currentData = snapshot.val() || {};
-
-      // Preserve ALL existing data + update founder
-      currentData.isFounder = setFounder ? 1 : 0;  // Numbers fix boolean bug
-      currentData.founderUpdatedAt = Date.now();
-
-      console.log(`🔧 ${userId}: isFounder=${currentData.isFounder}`);
-
-      await db.ref(`Mainformdata/${userId}`).set(currentData);
-
-      // Verify
-      const verify = await db.ref(`Mainformdata/${userId}/isFounder`).once('value');
-      console.log(`🔍 VERIFIED ${userId}:`, verify.val());
-
-      res.json({
-        success: true,
-        userId,
-        isFounder: setFounder,
-        verified: verify.val() == 1
-      });
-    } catch (error) {
-      console.error('PATCH error:', error);
-      res.status(500).json({ error: 'Server error' });
+    if (!userId || typeof isFounderString !== 'string') {
+      return res.status(400).json({ error: 'Invalid data' });
     }
+
+    // 🔥 STORE AS STRING - ZERO BUGS
+    await db.ref(`Mainformdata/${userId}`).update({
+      isFounder: isFounderString,  // "true"/"false"
+      founderUpdatedAt: Date.now()
+    });
+
+    // Verify
+    const verify = await db.ref(`Mainformdata/${userId}/isFounder`).once('value');
+    const verified = verify.val() === isFounderString;
+
+    console.log(`✅ ${userId}: ${isFounderString} (verified: ${verified})`);
+
+    res.json({
+      success: true,
+      userId,
+      isFounder: isFounderString === 'true',
+      verified
+    });
     return;
   }
 
