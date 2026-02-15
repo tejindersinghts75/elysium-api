@@ -28,7 +28,7 @@ export default async function handler(req, res) {
       name: user.name || '',
       email: user.email || '',
       mobile: user.mobile || '',
-      isFounder: user.isFounder === 'true'  // 🔥 STRING → BOOLEAN
+      isFounder: Boolean(user.isFounder)   // correct
     }));
 
     res.json(users);
@@ -36,25 +36,37 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'PATCH') {
-  const form = formidable({ multiples: false });
-  const [fields] = await form.parse(req);
+    const form = formidable({ multiples: false });
+    const { fields } = await form.parse(req);
 
-  const userId = Array.isArray(fields.userId) ? fields.userId[0] : fields.userId;
-  const isFounderString = fields.isFounder;  // Keep as-is
+    const userId = Array.isArray(fields.userId)
+      ? fields.userId[0]
+      : fields.userId;
 
-  // 🔥 FIXED VALIDATION
-  if (!userId || isFounderString !== 'true' && isFounderString !== 'false') {
-    return res.status(400).json({ error: 'Invalid userId or isFounder' });
+    const isFounderValue = Array.isArray(fields.isFounder)
+      ? fields.isFounder[0]
+      : fields.isFounder;
+
+    if (!userId || typeof isFounderValue === 'undefined') {
+      return res.status(400).json({ error: 'Invalid data' });
+    }
+
+    const isFounderBoolean = isFounderValue === 'true';
+
+    await db.ref(`Mainformdata/${userId}`).update({
+      isFounder: isFounderBoolean,
+      founderUpdatedAt: Date.now()
+    });
+
+    res.json({
+      success: true,
+      userId,
+      isFounder: isFounderBoolean
+    });
+
+    return;
   }
 
-  await db.ref(`Mainformdata/${userId}`).update({
-    isFounder: isFounderString,  // "true" or "false"
-    founderUpdatedAt: Date.now()
-  });
-
-  res.json({ success: true, userId, isFounder: isFounderString });
-  return;
-}
 
 
   res.status(405).json({ error: 'Method not allowed' });
