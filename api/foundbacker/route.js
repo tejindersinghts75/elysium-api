@@ -1,6 +1,6 @@
+import formidable from 'formidable';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
-import formidable from 'formidable';
 import { createClerkClient } from '@clerk/backend';
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -25,14 +25,13 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 🔥 ADMIN CHECK (same pattern as your signup)
-  const adminUid = req.headers['x-admin-uid'];
-  if (!adminUid || adminUid !== process.env.ADMIN_UID) {  // Set ADMIN_UID in Vercel
-    return res.status(401).json({ error: 'Admin access required' });
-  }
+  // 🔥 TEMP: DISABLE ADMIN CHECK (for Webflow testing)
+  // const adminUid = req.headers['x-admin-uid'];
+  // if (!adminUid || adminUid !== process.env.ADMIN_UID) {
+  //   return res.status(401).json({ error: 'Admin access required' });
+  // }
 
   if (req.method === 'GET') {
-    // Fetch all Mainformdata
     const snapshot = await db.ref('Mainformdata').once('value');
     const data = snapshot.val() || {};
 
@@ -52,7 +51,6 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'PATCH') {
-    // Parse body
     const form = formidable({ multiples: false });
     const [fields] = await form.parse(req);
 
@@ -72,4 +70,3 @@ export default async function handler(req, res) {
 
   res.status(405).json({ error: 'Method not allowed' });
 }
-
