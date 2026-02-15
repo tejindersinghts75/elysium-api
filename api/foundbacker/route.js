@@ -33,28 +33,43 @@ export default async function handler(req, res) {
     }));
 
     res.json(users);
+     return;
   }
 
   if (req.method === 'PATCH') {
-    const form = formidable({ multiples: false });
-    const [fields] = await form.parse(req);
+  const form = formidable({ multiples: false });
+  const [fields] = await form.parse(req);
 
-    // 🔥 FIXED: Handle FormData array bug
-    const userId = Array.isArray(fields.userId) ? fields.userId[0] : fields.userId;
-    const isFounder = fields.isFounder === 'true';
+  const userId = Array.isArray(fields.userId) ? fields.userId[0] : fields.userId;
+  const setFounder = fields.isFounder === 'true';
 
-    if (!userId) {
-      return res.status(400).json({ error: 'userId required' });
-    }
-
-    // Update Firebase
-    await db.ref(`Mainformdata/${userId}`).update({
-      isFounder,
-      founderUpdatedAt: Date.now()
-    });
-
-    res.json({ success: true });
+  if (!userId) {
+    return res.status(400).json({ error: 'userId required' });
   }
+
+  // 🔥 EXPLICIT BOOLEAN CAST + FULL OBJECT
+  const updateData = {
+    isFounder: !!setFounder,  // Force boolean
+    founderUpdatedAt: Date.now()
+  };
+
+  console.log('🔧 UPDATING:', userId, 'isFounder:', updateData.isFounder);
+
+  await db.ref(`Mainformdata/${userId}`).update(updateData);
+
+  // 🔍 VERIFY UPDATE WORKED
+  const verify = await db.ref(`Mainformdata/${userId}/isFounder`).once('value');
+  console.log('🔍 VERIFIED:', verify.val());
+
+  res.json({
+    success: true,
+    userId,
+    isFounder: !!setFounder,
+    verified: verify.val()
+  });
+  return;  // 🔥 ADD THIS
+}
+
 
   res.status(405).json({ error: 'Method not allowed' });
 }
