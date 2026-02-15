@@ -66,7 +66,7 @@ export default async function handler(req, res) {
     currentData.isFounder = setFounder;
     currentData.founderUpdatedAt = Date.now();
 
-    await db.ref(`Mainformdata/${userId}`).set(currentData);
+    await db.ref(`Mainformdata/${userId}`).update(currentData);
 
     const verify = await db.ref(`Mainformdata/${userId}/isFounder`).once('value');
 
