@@ -36,36 +36,26 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'PATCH') {
-    const form = formidable({ multiples: false });
-    const [fields] = await form.parse(req);
+  const form = formidable({ multiples: false });
+  const [fields] = await form.parse(req);
 
-    const userId = Array.isArray(fields.userId) ? fields.userId[0] : fields.userId;
-    const isFounderString = fields.isFounder;  // "true" or "false"
+  const userId = Array.isArray(fields.userId) ? fields.userId[0] : fields.userId;
+  const isFounderString = fields.isFounder;  // Keep as-is
 
-    if (!userId || typeof isFounderString !== 'string') {
-      return res.status(400).json({ error: 'Invalid data' });
-    }
-
-    // 🔥 STORE AS STRING - ZERO BUGS
-    await db.ref(`Mainformdata/${userId}`).update({
-      isFounder: isFounderString,  // "true"/"false"
-      founderUpdatedAt: Date.now()
-    });
-
-    // Verify
-    const verify = await db.ref(`Mainformdata/${userId}/isFounder`).once('value');
-    const verified = verify.val() === isFounderString;
-
-    console.log(`✅ ${userId}: ${isFounderString} (verified: ${verified})`);
-
-    res.json({
-      success: true,
-      userId,
-      isFounder: isFounderString === 'true',
-      verified
-    });
-    return;
+  // 🔥 FIXED VALIDATION
+  if (!userId || isFounderString !== 'true' && isFounderString !== 'false') {
+    return res.status(400).json({ error: 'Invalid userId or isFounder' });
   }
+
+  await db.ref(`Mainformdata/${userId}`).update({
+    isFounder: isFounderString,  // "true" or "false"
+    founderUpdatedAt: Date.now()
+  });
+
+  res.json({ success: true, userId, isFounder: isFounderString });
+  return;
+}
+
 
   res.status(405).json({ error: 'Method not allowed' });
 }
