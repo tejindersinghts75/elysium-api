@@ -139,7 +139,8 @@ export default async function handler(req, res) {
             household: household || '',
             why: why?.trim() || '',
             referredBy: referredBy || '',
-            updatedAt: Date.now()
+            updatedAt: Date.now(),
+            isFounder: false,
           });
 
 
@@ -308,7 +309,8 @@ export default async function handler(req, res) {
         household: household || '',
         why: why?.trim() || '',
         referredBy: referredBy || '',
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        isFounder: false,
       }),
       db.ref(`users/${userId}`).set({
         firstname: firstName,
