@@ -40,46 +40,49 @@ export default async function handler(req, res) {
     return;
   }
 
-  if (req.method === 'PATCH') {
-    try {
-      const form = formidable({ multiples: false });
-      const [fields] = await form.parse(req);
+ if (req.method === 'PATCH') {
+  try {
+    const form = formidable({ multiples: false });
+    const [fields] = await form.parse(req);
 
-      const userId = Array.isArray(fields.userId) ? fields.userId[0] : fields.userId;
-      const setFounder = fields.isFounder === 'true';
+    const userId = Array.isArray(fields.userId)
+      ? fields.userId[0]
+      : fields.userId;
 
-      if (!userId) {
-        return res.status(400).json({ error: 'userId required' });
-      }
+    const isFounderValue = Array.isArray(fields.isFounder)
+      ? fields.isFounder[0]
+      : fields.isFounder;
 
-      // 🔥 FULL READ → MODIFY → WRITE (Bulletproof)
-      const snapshot = await db.ref(`Mainformdata/${userId}`).once('value');
-      const currentData = snapshot.val() || {};
+    const setFounder = isFounderValue === 'true';
 
-      // Preserve ALL existing data + update founder
-      currentData.isFounder = setFounder ? 1 : 0;  // Numbers fix boolean bug
-      currentData.founderUpdatedAt = Date.now();
-
-      console.log(`🔧 ${userId}: isFounder=${currentData.isFounder}`);
-
-      await db.ref(`Mainformdata/${userId}`).set(currentData);
-
-      // Verify
-      const verify = await db.ref(`Mainformdata/${userId}/isFounder`).once('value');
-      console.log(`🔍 VERIFIED ${userId}:`, verify.val());
-
-      res.json({
-        success: true,
-        userId,
-        isFounder: setFounder,
-        verified: verify.val() == 1
-      });
-    } catch (error) {
-      console.error('PATCH error:', error);
-      res.status(500).json({ error: 'Server error' });
+    if (!userId) {
+      return res.status(400).json({ error: 'userId required' });
     }
-    return;
+
+    const snapshot = await db.ref(`Mainformdata/${userId}`).once('value');
+    const currentData = snapshot.val() || {};
+
+    // ✅ STORE BOOLEAN
+    currentData.isFounder = setFounder;
+    currentData.founderUpdatedAt = Date.now();
+
+    await db.ref(`Mainformdata/${userId}`).set(currentData);
+
+    const verify = await db.ref(`Mainformdata/${userId}/isFounder`).once('value');
+
+    res.json({
+      success: true,
+      userId,
+      isFounder: verify.val(),
+      verified: true
+    });
+return
+  } catch (error) {
+    console.error('PATCH error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
+}
+
 
   res.status(405).json({ error: 'Method not allowed' });
 }
