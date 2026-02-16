@@ -71,7 +71,7 @@ async function handleUserData(req, res, clerkUserId) {
         unitReservations = data.PaymentFormData.unit;
       }
 
-      if (data.stipePayment?.paymentStatus === "success") {
+      if (data.stripePayment?.paymentStatus === "success") {
         earlyAppStatus = { earlyAppStatus: 'Yes', selectApplication: '99', date: 'July 2025', isFounder: earlyAppStatus.isFounder };
       }
       if (data.isFounder === 'Yes') {
