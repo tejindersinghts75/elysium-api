@@ -74,9 +74,8 @@ async function handleUserData(req, res, clerkUserId) {
       if (data.stripePayment?.paymentStatus === "success") {
         earlyAppStatus = { earlyAppStatus: 'Yes', selectApplication: '99', date: 'July 2025', isFounder: earlyAppStatus.isFounder };
       }
-      if (data.isFounder === 'Yes') {
-        earlyAppStatus.isFounder = 'Yes';
-      }
+    earlyAppStatus.isFounder = data?.isFounder ? 'Yes' : 'No';
+
     });
   }
 
