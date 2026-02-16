@@ -59,7 +59,7 @@ async function handleUserData(req, res, clerkUserId) {
   const mainformSnapshot = await mainformRef.orderByChild('uid').equalTo(clerkUserId).once('value');
 
   let unitReservations = [];
-  let earlyAppStatus = { earlyAppStatus: 'No', selectApplication: '0', foundingmember: 'No', date: 'January 2027' };
+  let earlyAppStatus = { earlyAppStatus: 'No', selectApplication: '0', isFounder: 'No', date: 'January 2027' };
   let hasCompleteData = false;
 
   if (mainformSnapshot.exists()) {
@@ -72,10 +72,10 @@ async function handleUserData(req, res, clerkUserId) {
       }
 
       if (data.PaymentFormData?.selectapplication === '100') {
-        earlyAppStatus = { earlyAppStatus: 'Yes', selectApplication: '100', date: 'July 2025', foundingmember: earlyAppStatus.foundingmember };
+        earlyAppStatus = { earlyAppStatus: 'Yes', selectApplication: '100', date: 'July 2025', isFounder: earlyAppStatus.isFounder };
       }
-      if (data.foundingmember === 'Yes') {
-        earlyAppStatus.foundingmember = 'Yes';
+      if (data.isFounder === 'Yes') {
+        earlyAppStatus.isFounder = 'Yes';
       }
     });
   }
