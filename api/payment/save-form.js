@@ -49,7 +49,8 @@ export default async function handler(req, res) {
       teslaoptions,
       chooseterm,
       selectapplication,
-      diningpackage
+      diningpackage,
+      priceperfoot
     } = body;
 
     // Validate
@@ -112,6 +113,7 @@ export default async function handler(req, res) {
       chooseterm: chooseterm || '',
       selectapplication: selectapplication || '',
       diningpackage: diningpackage || '',
+      priceperfoot:priceperfoot||'',
       submittedAt: Date.now()
     };
 
