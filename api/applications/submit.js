@@ -30,9 +30,7 @@ export default async function handler(req, res) {
   const form = formidable({ maxFileSize: 10 * 1024 * 1024 });
 
   form.parse(req, async (err, fields, files) => {
-    if (err) {
-      return res.status(500).json({ error: "Form parse error" });
-    }
+    if (err) return res.status(500).json({ error: "Form parse error" });
 
     try {
       const f = {};
@@ -47,7 +45,6 @@ export default async function handler(req, res) {
         country: f.country,
         phone: f.phone,
         location: f.location,
-
         company_name: f.company_name,
         title: f.title,
         start_month: f.start_month,
@@ -55,12 +52,10 @@ export default async function handler(req, res) {
         end_month: f.end_month,
         end_year: f.end_year,
         current_role: !!f.current_role,
-
         school: f.school,
         degree: f.degree,
         discipline: f.discipline,
         linkedin_url: f.linkedin_url,
-
         age_18: normalizeSelect(f.age_18),
         prev_coinbase: normalizeSelect(f.prev_coinbase),
         referral_source: f.referral_source,
@@ -74,25 +69,20 @@ export default async function handler(req, res) {
         coinbase_mission: f.coinbase_mission,
         conflict_interest: normalizeSelect(f.conflict_interest),
         referred_client: normalizeSelect(f.referred_client),
-
         gender: f.gender,
         latino_hispanic: normalizeSelect(f.latino_hispanic),
         veteran_status: f.veteran_status,
         disability_status: f.disability_status,
-
         submitted_at: new Date().toISOString(),
       };
 
-      // ---------- HANDLE FILE ----------
+      // ---------- FILE UPLOAD ----------
       if (files.resume) {
-        const file = Array.isArray(files.resume)
-          ? files.resume[0]
-          : files.resume;
-
+        const file = Array.isArray(files.resume) ? files.resume[0] : files.resume;
         const buffer = fs.readFileSync(file.filepath);
 
         const uploadRes = await fetch(
-          `https://content.airtable.com/v0/${process.env.AIRTABLE_BASE}/${process.env.AIRTABLE_TABLE}/attachments`,
+          `https://content.airtable.com/v0/bases/${process.env.AIRTABLE_BASE}/attachments`,
           {
             method: "POST",
             headers: {
@@ -106,24 +96,19 @@ export default async function handler(req, res) {
           }
         );
 
+        const uploadData = await uploadRes.json();
+        console.log("UPLOAD RESULT:", uploadData);
+
         if (!uploadRes.ok) {
-          const txt = await uploadRes.text();
-          return res.status(400).json({ error: txt });
+          return res.status(400).json(uploadData);
         }
 
-        const uploaded = await uploadRes.json();
-
-        airtableFields.resume = [
-          {
-            url: uploaded.url,
-            filename: file.originalFilename,
-          },
-        ];
+        airtableFields.resume = [{ id: uploadData.id }];
       }
 
       // ---------- CREATE RECORD ----------
       const createRes = await fetch(
-        `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE}/${process.env.AIRTABLE_TABLE}`,
+        `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE}/${encodeURIComponent(process.env.AIRTABLE_TABLE)}`,
         {
           method: "POST",
           headers: {
@@ -138,9 +123,7 @@ export default async function handler(req, res) {
 
       const result = await createRes.json();
 
-      if (!createRes.ok) {
-        return res.status(400).json(result);
-      }
+      if (!createRes.ok) return res.status(400).json(result);
 
       return res.status(200).json({ success: true, record: result });
 
