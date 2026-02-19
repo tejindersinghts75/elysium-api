@@ -31,7 +31,7 @@ export default async function handler(req, res) {
     maxFieldsSize: 20 * 1024 * 1024,
     maxFileSize: 10 * 1024 * 1024,
     keepExtensions: true,
-    allowEmptyFiles: false,
+   // allowEmptyFiles: false,
   });
 
   try {
