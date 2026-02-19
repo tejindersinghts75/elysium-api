@@ -1,14 +1,15 @@
 import { IncomingForm } from "formidable";  // ONLY this!
 
-// ✅ Custom buffer helper (works everywhere)
 async function bufferFromFile(file) {
+  // file = Readable stream directly in v3
   return new Promise((resolve, reject) => {
     const chunks = [];
-    file.file.on('data', chunk => chunks.push(chunk));
-    file.file.on('end', () => resolve(Buffer.concat(chunks)));
-    file.file.on('error', reject);
+    file.on('data', chunk => chunks.push(chunk));  // ✅ file.on, NOT file.file.on
+    file.on('end', () => resolve(Buffer.concat(chunks)));
+    file.on('error', reject);
   });
 }
+
 
 export const config = {
   api: { bodyParser: false },
