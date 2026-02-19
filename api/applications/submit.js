@@ -4,21 +4,14 @@ export const config = {
   api: { bodyParser: false },
 };
 
-function normalizeSelect(value) {
-  if (!value) return null;
-  const v = String(value).trim().toLowerCase();
-  if (v === "yes") return "Yes";
-  if (v === "no") return "No";
-  if (v === "confirmed") return "Confirmed";
-  return value;
-}
+export const maxDuration = 60;  // ✅ Add this
 
+// Remove normalizeSelect - use raw form values
 export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Only POST allowed" });
 
-  // ✅ Memory chunks (no stream hangs)
-  const resumeBufferChunks = [];
+  const resumeBufferChunks = [];  // ✅ Per-request
 
   const form = new IncomingForm({
     maxFieldsSize: 20 * 1024 * 1024,
@@ -26,7 +19,7 @@ export default async function handler(req, res) {
     keepExtensions: true,
   });
 
-  // ✅ Vercel-optimized: direct memory buffer
+  // ✅ FIXED: No destroy clear - chunks persist
   form.fileWriteStreamHandler = () => {
     const Writable = require('stream').Writable;
     return new Writable({
@@ -34,9 +27,7 @@ export default async function handler(req, res) {
         resumeBufferChunks.push(chunk);
         cb();
       },
-      destroy() {
-        resumeBufferChunks.length = 0;
-      }
+      // ✅ Remove destroy() - keeps chunks!
     });
   };
 
@@ -50,20 +41,21 @@ export default async function handler(req, res) {
       f[key] = Array.isArray(value) ? value[0] : value;
     });
 
+    // ✅ RAW VALUES - no normalizeSelect!
     const airtableFields = {
       firstname: f.firstname, lastname: f.lastname, email: f.email, country: f.country,
       phone: f.phone, location: f.location, company_name: f.company_name, title: f.title,
       start_month: f.start_month, start_year: f.start_year, end_month: f.end_month, end_year: f.end_year,
       current_role: !!f.current_role, school: f.school, degree: f.degree, discipline: f.discipline,
       linkedin_url: f.linkedin_url,
-      age_18: normalizeSelect(f.age_18), prev_coinbase: normalizeSelect(f.prev_coinbase),
-      referral_source: f.referral_source, privacy_notice: normalizeSelect(f.privacy_notice),
-      ai_tools: normalizeSelect(f.ai_tools), work_authorized: normalizeSelect(f.work_authorized),
-      visa_sponsorship: normalizeSelect(f.visa_sponsorship),
+      age_18: f.age_18, prev_coinbase: f.prev_coinbase,  // ✅ Raw: "yes"/"No"
+      referral_source: f.referral_source, privacy_notice: f.privacy_notice,
+      ai_tools: f.ai_tools, work_authorized: f.work_authorized,
+      visa_sponsorship: f.visa_sponsorship,
       gov_official: f.gov_official, relative_gov: f.relative_gov,
-      owns_crypto: normalizeSelect(f.owns_crypto), coinbase_mission: f.coinbase_mission,
-      conflict_interest: normalizeSelect(f.conflict_interest), referred_client: normalizeSelect(f.referred_client),
-      gender: f.gender, latino_hispanic: normalizeSelect(f.latino_hispanic),
+      owns_crypto: f.owns_crypto, coinbase_mission: f.coinbase_mission,
+      conflict_interest: f.conflict_interest, referred_client: f.referred_client,
+      gender: f.gender, latino_hispanic: f.latino_hispanic,
       veteran_status: f.veteran_status, disability_status: f.disability_status,
       submitted_at: new Date().toISOString(),
     };
@@ -100,7 +92,7 @@ export default async function handler(req, res) {
         console.error("Resume upload failed:", uploadData);
       }
     } else {
-      console.log("ℹ️ No resume");
+      console.log("ℹ️ No resume chunks:", resumeBufferChunks.length);
     }
 
     // ========== AIRTABLE RECORD ==========
@@ -132,14 +124,9 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error("❌ Error:", error);
-
     if (error.code === "MAX_FILE_SIZE") {
       return res.status(400).json({ error: "File too large (max 10MB)" });
     }
-    if (error.httpCode === 400) {
-      return res.status(400).json({ error: "Invalid form data" });
-    }
-
     return res.status(500).json({
       error: "Server error",
       details: error.message,
