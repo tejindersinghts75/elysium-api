@@ -1,15 +1,4 @@
-import { IncomingForm } from "formidable";  // ONLY this!
-
-async function bufferFromFile(file) {
-  // file = Readable stream directly in v3
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    file.on('data', chunk => chunks.push(chunk));  // ✅ file.on, NOT file.file.on
-    file.on('end', () => resolve(Buffer.concat(chunks)));
-    file.on('error', reject);
-  });
-}
-
+import { IncomingForm } from "formidable";
 
 export const config = {
   api: { bodyParser: false },
@@ -28,17 +17,33 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Only POST allowed" });
 
+  // ✅ Memory chunks (no stream hangs)
+  const resumeBufferChunks = [];
+
   const form = new IncomingForm({
     maxFieldsSize: 20 * 1024 * 1024,
     maxFileSize: 10 * 1024 * 1024,
     keepExtensions: true,
-   // allowEmptyFiles: false,
   });
+
+  // ✅ Vercel-optimized: direct memory buffer
+  form.fileWriteStreamHandler = () => {
+    const Writable = require('stream').Writable;
+    return new Writable({
+      write(chunk, _, cb) {
+        resumeBufferChunks.push(chunk);
+        cb();
+      },
+      destroy() {
+        resumeBufferChunks.length = 0;
+      }
+    });
+  };
 
   try {
     const [fields, files] = await form.parse(req);
-    console.log("✅ Parsed fields:", Object.keys(fields));
-    console.log("✅ Parsed files:", Object.keys(files || {}));
+    console.log("✅ Fields:", Object.keys(fields));
+    console.log("✅ Files:", Object.keys(files || {}));
 
     const f = {};
     Object.entries(fields).forEach(([key, value]) => {
@@ -54,20 +59,21 @@ export default async function handler(req, res) {
       age_18: normalizeSelect(f.age_18), prev_coinbase: normalizeSelect(f.prev_coinbase),
       referral_source: f.referral_source, privacy_notice: normalizeSelect(f.privacy_notice),
       ai_tools: normalizeSelect(f.ai_tools), work_authorized: normalizeSelect(f.work_authorized),
-      visa_sponsorship: normalizeSelect(f.visa_sponsorship), gov_official: f.gov_official,
-      relative_gov: f.relative_gov, owns_crypto: normalizeSelect(f.owns_crypto),
-      coinbase_mission: f.coinbase_mission, conflict_interest: normalizeSelect(f.conflict_interest),
-      referred_client: normalizeSelect(f.referred_client), gender: f.gender,
-      latino_hispanic: normalizeSelect(f.latino_hispanic), veteran_status: f.veteran_status,
-      disability_status: f.disability_status, submitted_at: new Date().toISOString(),
+      visa_sponsorship: normalizeSelect(f.visa_sponsorship),
+      gov_official: f.gov_official, relative_gov: f.relative_gov,
+      owns_crypto: normalizeSelect(f.owns_crypto), coinbase_mission: f.coinbase_mission,
+      conflict_interest: normalizeSelect(f.conflict_interest), referred_client: normalizeSelect(f.referred_client),
+      gender: f.gender, latino_hispanic: normalizeSelect(f.latino_hispanic),
+      veteran_status: f.veteran_status, disability_status: f.disability_status,
+      submitted_at: new Date().toISOString(),
     };
 
-    // ========== FILE UPLOAD ==========
-    if (files.resume) {
-      const file = Array.isArray(files.resume) ? files.resume[0] : files.resume;
-      console.log("📁 Uploading:", file.originalFilename);
+    // ========== RESUME UPLOAD ==========
+    if (files.resume && resumeBufferChunks.length > 0) {
+      const buffer = Buffer.concat(resumeBufferChunks);
+      const fileInfo = Array.isArray(files.resume) ? files.resume[0] : files.resume;
 
-      const buffer = await bufferFromFile(file);
+      console.log("📁 Buffer:", buffer.length, "bytes");
 
       const uploadRes = await fetch(
         `https://content.airtable.com/v0/bases/${process.env.AIRTABLE_BASE}/attachments`,
@@ -78,44 +84,66 @@ export default async function handler(req, res) {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            filename: file.originalFilename,
-            contentType: file.mimetype || "application/pdf",
+            filename: fileInfo.originalFilename || 'resume.pdf',
+            contentType: fileInfo.mimetype || "application/pdf",
             file: buffer.toString("base64"),
           }),
         }
       );
 
       const uploadData = await uploadRes.json();
-      console.log("📤 Upload:", uploadData);
+      console.log("📤 Airtable upload:", uploadData);
 
-      if (!uploadRes.ok) {
-        return res.status(400).json({ error: "Resume upload failed", details: uploadData });
+      if (uploadRes.ok) {
+        airtableFields.resume = [{ id: uploadData.id }];
+      } else {
+        console.error("Resume upload failed:", uploadData);
       }
-
-      airtableFields.resume = [{ id: uploadData.id }];
+    } else {
+      console.log("ℹ️ No resume");
     }
 
-    // ========== AIRTABLE ==========
+    // ========== AIRTABLE RECORD ==========
+    console.log("🌐 Creating record...");
     const createRes = await fetch(
       `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE}/${encodeURIComponent(process.env.AIRTABLE_TABLE)}`,
       {
         method: "POST",
-        headers: { Authorization: `Bearer ${process.env.AIRTABLE_PAT}`, "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ records: [{ fields: airtableFields }] }),
       }
     );
 
     const result = await createRes.json();
-    console.log("✅ Airtable:", result);
+    console.log("✅ Record created:", result);
 
-    if (!createRes.ok) return res.status(400).json({ error: "Airtable failed", details: result });
+    if (!createRes.ok) {
+      return res.status(400).json({ error: "Airtable failed", details: result });
+    }
 
-    return res.status(200).json({ success: true, record: result.records[0], message: "Submitted!" });
+    return res.status(200).json({
+      success: true,
+      recordId: result.records[0].id,
+      message: "Application submitted successfully!"
+    });
 
   } catch (error) {
     console.error("❌ Error:", error);
-    if (error.code === "MAX_FILE_SIZE") return res.status(400).json({ error: "File too large (10MB)" });
-    if (error.code === "MAX_FIELDS_SIZE") return res.status(400).json({ error: "Form too large" });
-    return res.status(500).json({ error: "Server error", details: error.message, code: error.code });
+
+    if (error.code === "MAX_FILE_SIZE") {
+      return res.status(400).json({ error: "File too large (max 10MB)" });
+    }
+    if (error.httpCode === 400) {
+      return res.status(400).json({ error: "Invalid form data" });
+    }
+
+    return res.status(500).json({
+      error: "Server error",
+      details: error.message,
+      code: error.code
+    });
   }
 }
