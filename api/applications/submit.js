@@ -1,4 +1,8 @@
-import { IncomingForm } from "formidable";
+import formidable from "formidable";
+import fs from "fs";
+import { initializeApp, cert } from "firebase-admin/app";
+import { getDatabase } from "firebase-admin/database";
+import { getStorage } from "firebase-admin/storage";
 
 export const config = {
   api: { bodyParser: false },
@@ -6,133 +10,103 @@ export const config = {
 
 export const maxDuration = 60;
 
+/* ================= FIREBASE ADMIN INIT ================= */
+
+const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
+const app = initializeApp({
+  credential: cert(serviceAccount),
+  databaseURL: process.env.FIREBASE_URL,
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET, // important
+});
+
+const db = getDatabase(app);
+const bucket = getStorage(app).bucket();
+
+/* ================= HANDLER ================= */
+
 export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Only POST allowed" });
-
-  const form = new IncomingForm({
-    maxFieldsSize: 20 * 1024 * 1024,
-    maxFileSize: 10 * 1024 * 1024,
-    keepExtensions: true,
-  });
+  if (req.method !== "POST")
+    return res.status(405).json({ error: "POST only" });
 
   try {
-    const [fields, files] = await form.parse(req);
-    console.log("✅ Fields:", Object.keys(fields));
-    console.log("✅ Files:", Object.keys(files || {}));
+    /* ========= PARSE FORM ========= */
 
-    const f = {};
-    Object.entries(fields).forEach(([key, value]) => {
-      f[key] = Array.isArray(value) ? value[0] : value;
+    const form = formidable({
+      multiples: false,
+      maxFileSize: 10 * 1024 * 1024,
+      keepExtensions: true,
     });
 
-    // Raw values - no normalization needed
-    const airtableFields = {
-      firstname: f.firstname, lastname: f.lastname, email: f.email, country: f.country,
-      phone: f.phone, location: f.location, company_name: f.company_name, title: f.title,
-      start_month: f.start_month, start_year: f.start_year, end_month: f.end_month, end_year: f.end_year,
-      current_role: !!f.current_role, school: f.school, degree: f.degree, discipline: f.discipline,
-      linkedin_url: f.linkedin_url,
-      age_18: f.age_18, prev_coinbase: f.prev_coinbase,
-      referral_source: f.referral_source, privacy_notice: f.privacy_notice,
-      ai_tools: f.ai_tools, work_authorized: f.work_authorized,
-      visa_sponsorship: f.visa_sponsorship,
-      gov_official: f.gov_official, relative_gov: f.relative_gov,
-      owns_crypto: f.owns_crypto, coinbase_mission: f.coinbase_mission,
-      conflict_interest: f.conflict_interest, referred_client: f.referred_client,
-      gender: f.gender, latino_hispanic: f.latino_hispanic,
-      veteran_status: f.veteran_status, disability_status: f.disability_status,
-      submitted_at: new Date().toISOString(),
-    };
+    const [fields, files] = await form.parse(req);
 
-    // ========== RESUME UPLOAD (100% RELIABLE) ==========
+    const data = {};
+    Object.keys(fields).forEach((key) => {
+      data[key] = Array.isArray(fields[key])
+        ? fields[key][0]
+        : fields[key];
+    });
+
+    /* ========= UPLOAD PDF ========= */
+
+    let resumeUrl = null;
+
     if (files.resume) {
-      const file = Array.isArray(files.resume) ? files.resume[0] : files.resume;
-      console.log("📁 Processing resume:", file.originalFilename, "size:", file.size);
+      const file = Array.isArray(files.resume)
+        ? files.resume[0]
+        : files.resume;
 
-      // Await file stream completion
-      const bufferPromise = new Promise((resolve, reject) => {
-        const chunks = [];
-        if (file.readableEnded) {
-          resolve(Buffer.alloc(0)); // Empty file case
-        } else {
-          file.on('data', chunk => chunks.push(chunk));
-          file.on('end', () => resolve(Buffer.concat(chunks)));
-          file.on('error', reject);
-        }
+      const filePath = file.filepath;
+      const fileName = `resumes/${Date.now()}-${file.originalFilename}`;
+
+      // upload to firebase storage
+      await bucket.upload(filePath, {
+        destination: fileName,
+        metadata: {
+          contentType: file.mimetype,
+        },
       });
 
-      const buffer = await bufferPromise;
-      console.log("📁 Buffer ready:", buffer.length, "bytes");
+      // make public (simple access)
+      await bucket.file(fileName).makePublic();
 
-      if (buffer.length > 0) {
-        const uploadRes = await fetch(
-          `https://content.airtable.com/v0/bases/${process.env.AIRTABLE_BASE}/attachments`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              filename: file.originalFilename || 'resume.pdf',
-              contentType: file.mimetype || "application/pdf",
-              file: buffer.toString("base64"),
-            }),
-          }
-        );
+      resumeUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
 
-        const uploadData = await uploadRes.json();
-        console.log("📤 Airtable upload:", uploadData);
-
-        if (uploadRes.ok) {
-          airtableFields.resume = [{ id: uploadData.id }];
-        } else {
-          console.error("Resume upload failed:", uploadData);
-        }
-      } else {
-        console.log("ℹ️ Empty resume file skipped");
-      }
-    } else {
-      console.log("ℹ️ No resume file");
+      // cleanup temp file
+      fs.unlinkSync(filePath);
     }
 
-    // ========== AIRTABLE RECORD ==========
-    console.log("🌐 Creating record...");
-    const createRes = await fetch(
-      `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE}/${encodeURIComponent(process.env.AIRTABLE_TABLE)}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ records: [{ fields: airtableFields }] }),
-      }
-    );
+    /* ========= SAVE TO REALTIME DB ========= */
 
-    const result = await createRes.json();
-    console.log("✅ Record created:", result);
+    const applicationData = {
+      ...data,
+      resumeUrl,
+      createdAt: Date.now(),
+    };
 
-    if (!createRes.ok) {
-      return res.status(400).json({ error: "Airtable failed", details: result });
-    }
+    const newRef = db.ref("applications").push();
+    await newRef.set(applicationData);
+
+    /* ========= RESPONSE ========= */
 
     return res.status(200).json({
       success: true,
-      recordId: result.records[0].id,
-      message: "Application submitted successfully!"
+      id: newRef.key,
+      resumeUrl,
+      message: "Application saved",
     });
 
   } catch (error) {
-    console.error("❌ Error:", error);
-    if (error.code === "MAX_FILE_SIZE") {
-      return res.status(400).json({ error: "File too large (max 10MB)" });
+    console.error("UPLOAD ERROR:", error);
+
+    if (error.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({ error: "File too large" });
     }
+
     return res.status(500).json({
       error: "Server error",
-      details: error.message,
-      code: error.code
+      message: error.message,
     });
   }
 }
