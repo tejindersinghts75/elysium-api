@@ -5,6 +5,9 @@
     },
     "api/referrals/index.js": {
       "maxDuration": 30
+    },
+    "api/applications/submit.js": {
+      "maxDuration": 30
     }
   },
   "headers": [
