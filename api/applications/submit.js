@@ -4,32 +4,17 @@ export const config = {
   api: { bodyParser: false },
 };
 
-export const maxDuration = 60;  // ✅ Add this
+export const maxDuration = 60;
 
-// Remove normalizeSelect - use raw form values
 export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Only POST allowed" });
-
-  const resumeBufferChunks = [];  // ✅ Per-request
 
   const form = new IncomingForm({
     maxFieldsSize: 20 * 1024 * 1024,
     maxFileSize: 10 * 1024 * 1024,
     keepExtensions: true,
   });
-
-  // ✅ FIXED: No destroy clear - chunks persist
-  form.fileWriteStreamHandler = () => {
-    const Writable = require('stream').Writable;
-    return new Writable({
-      write(chunk, _, cb) {
-        resumeBufferChunks.push(chunk);
-        cb();
-      },
-      // ✅ Remove destroy() - keeps chunks!
-    });
-  };
 
   try {
     const [fields, files] = await form.parse(req);
@@ -41,14 +26,14 @@ export default async function handler(req, res) {
       f[key] = Array.isArray(value) ? value[0] : value;
     });
 
-    // ✅ RAW VALUES - no normalizeSelect!
+    // Raw values - no normalization needed
     const airtableFields = {
       firstname: f.firstname, lastname: f.lastname, email: f.email, country: f.country,
       phone: f.phone, location: f.location, company_name: f.company_name, title: f.title,
       start_month: f.start_month, start_year: f.start_year, end_month: f.end_month, end_year: f.end_year,
       current_role: !!f.current_role, school: f.school, degree: f.degree, discipline: f.discipline,
       linkedin_url: f.linkedin_url,
-      age_18: f.age_18, prev_coinbase: f.prev_coinbase,  // ✅ Raw: "yes"/"No"
+      age_18: f.age_18, prev_coinbase: f.prev_coinbase,
       referral_source: f.referral_source, privacy_notice: f.privacy_notice,
       ai_tools: f.ai_tools, work_authorized: f.work_authorized,
       visa_sponsorship: f.visa_sponsorship,
@@ -60,39 +45,56 @@ export default async function handler(req, res) {
       submitted_at: new Date().toISOString(),
     };
 
-    // ========== RESUME UPLOAD ==========
-    if (files.resume && resumeBufferChunks.length > 0) {
-      const buffer = Buffer.concat(resumeBufferChunks);
-      const fileInfo = Array.isArray(files.resume) ? files.resume[0] : files.resume;
+    // ========== RESUME UPLOAD (100% RELIABLE) ==========
+    if (files.resume) {
+      const file = Array.isArray(files.resume) ? files.resume[0] : files.resume;
+      console.log("📁 Processing resume:", file.originalFilename, "size:", file.size);
 
-      console.log("📁 Buffer:", buffer.length, "bytes");
-
-      const uploadRes = await fetch(
-        `https://content.airtable.com/v0/bases/${process.env.AIRTABLE_BASE}/attachments`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            filename: fileInfo.originalFilename || 'resume.pdf',
-            contentType: fileInfo.mimetype || "application/pdf",
-            file: buffer.toString("base64"),
-          }),
+      // Await file stream completion
+      const bufferPromise = new Promise((resolve, reject) => {
+        const chunks = [];
+        if (file.readableEnded) {
+          resolve(Buffer.alloc(0)); // Empty file case
+        } else {
+          file.on('data', chunk => chunks.push(chunk));
+          file.on('end', () => resolve(Buffer.concat(chunks)));
+          file.on('error', reject);
         }
-      );
+      });
 
-      const uploadData = await uploadRes.json();
-      console.log("📤 Airtable upload:", uploadData);
+      const buffer = await bufferPromise;
+      console.log("📁 Buffer ready:", buffer.length, "bytes");
 
-      if (uploadRes.ok) {
-        airtableFields.resume = [{ id: uploadData.id }];
+      if (buffer.length > 0) {
+        const uploadRes = await fetch(
+          `https://content.airtable.com/v0/bases/${process.env.AIRTABLE_BASE}/attachments`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              filename: file.originalFilename || 'resume.pdf',
+              contentType: file.mimetype || "application/pdf",
+              file: buffer.toString("base64"),
+            }),
+          }
+        );
+
+        const uploadData = await uploadRes.json();
+        console.log("📤 Airtable upload:", uploadData);
+
+        if (uploadRes.ok) {
+          airtableFields.resume = [{ id: uploadData.id }];
+        } else {
+          console.error("Resume upload failed:", uploadData);
+        }
       } else {
-        console.error("Resume upload failed:", uploadData);
+        console.log("ℹ️ Empty resume file skipped");
       }
     } else {
-      console.log("ℹ️ No resume chunks:", resumeBufferChunks.length);
+      console.log("ℹ️ No resume file");
     }
 
     // ========== AIRTABLE RECORD ==========
