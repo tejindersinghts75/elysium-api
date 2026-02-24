@@ -56,7 +56,7 @@ export default async function handler(req, res) {
 
   const signature = req.headers['stripe-signature'];
 
-  // 🔥 WEBHOOK - HANDLES BOTH $99 + $2000
+  // 🔥 WEBHOOK - HANDLES BOTH $99 + DYNAMIC BACKER
   if (signature) {
     try {
       const body = await buffer(req);
@@ -68,7 +68,6 @@ export default async function handler(req, res) {
         const { firebaseEntryKey, paymentType } = paymentIntent.metadata;
 
         if (firebaseEntryKey && paymentType) {
-          // 🔥 PAYMENT PATH BY TYPE
           const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
 
           const updateData = {
@@ -84,7 +83,6 @@ export default async function handler(req, res) {
             updateData.error = paymentIntent.last_payment_error?.message || 'Payment failed';
           }
 
-          // 🔥 UPDATE CORRECT PATH
           await db.ref(`Mainformdata/${firebaseEntryKey}/${paymentPath}`).update(updateData);
           console.log(`✅ Webhook ${paymentType} ${paymentPath}: ${firebaseEntryKey}`);
         }
@@ -98,35 +96,73 @@ export default async function handler(req, res) {
     return;
   }
 
-  // 🔥 PRICING ENDPOINT
+  // 🔥 STATIC PRICING (deposit + addon)
   if (req.method === 'GET' && req.query.pricing) {
     return res.json({
       deposit: 99.00,
-      backer: 2000.00,
+      backer: 2000.00,  // Fallback only
       addon: 29.95
     });
   }
 
-  // 🔥 CREATE PAYMENT INTENT (BOTH TYPES)
+  // 🔥 NEW: DYNAMIC BACKER PRICING FROM paymentFormData/pricePerFoot
+  if (req.method === 'GET' && req.query.backerPricing) {
+    try {
+      const { clerkUserId } = req.query;
+      if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
+
+      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+      if (!snapshot.exists()) return res.status(404).json({ error: 'No user data found for uid' });
+
+      const snapshotVal = snapshot.val();
+      const entryKey = Object.keys(snapshotVal)[0];
+      const paymentFormData = snapshotVal[entryKey]?.paymentFormData;
+
+      const backerPrice = parseFloat(paymentFormData?.pricePerFoot) || 0;
+      if (backerPrice === 0) return res.status(404).json({ error: 'No pricePerFoot in paymentFormData' });
+
+      console.log(`💰 User ${clerkUserId} (${entryKey}): $${backerPrice.toFixed(2)} from pricePerFoot`);
+
+      res.json({
+        backerPrice,  // Direct final price: 1574.1 → $1,574.10
+        entryKey,
+        pricePerFootRaw: paymentFormData.pricePerFoot,
+        currency: 'usd'
+      });
+    } catch (error) {
+      console.error('❌ Backer pricing error:', error);
+      res.status(500).json({ error: 'Pricing fetch failed' });
+    }
+    return;
+  }
+
+  // 🔥 CREATE PAYMENT INTENT (BOTH TYPES - NOW DYNAMIC FOR BACKER)
   if (req.method === 'POST') {
     try {
       const body = await buffer(req);
-      const { clerkUserId, paymentType = 'deposit', addons = [] } = JSON.parse(body.toString());
+      const { clerkUserId, paymentType = 'deposit', addons = [], dynamicAmount } = JSON.parse(body.toString());
 
-      console.log(`🔍 ${paymentType} for user ${clerkUserId}, addons:`, addons);
+      console.log(`🔍 ${paymentType} for user ${clerkUserId}, dynamicAmount: ${dynamicAmount}`);
 
-      // 🔥 PRICES BY TYPE
-      const PRICES = {
-        deposit: 99.00,   // $100 deposit
-        backer: 2000.00   // Founding Backer
-      };
+      // 🔥 DYNAMIC PRICING LOGIC
+      let totalAmount;
+      if (paymentType === 'backer' && dynamicAmount) {
+        // Use fetched pricePerFoot directly
+        totalAmount = parseFloat(dynamicAmount);
+        console.log(`💰 Dynamic backer: $${totalAmount.toFixed(2)}`);
+      } else {
+        // Static deposit pricing
+        const PRICES = { deposit: 99.00 };
+        const BASE_PRICE = PRICES[paymentType] || 99.00;
+        const ADDON_PRICE = 29.95;
+        const hasAddon = addons.length > 0 && paymentType === 'deposit';
+        totalAmount = BASE_PRICE + (hasAddon ? ADDON_PRICE : 0);
+        console.log(`💰 ${paymentType}: $${totalAmount.toFixed(2)}`);
+      }
 
-      const BASE_PRICE = PRICES[paymentType] || 99.00;
-      const ADDON_PRICE = 29.95;
-      const hasAddon = addons.length > 0 && paymentType === 'deposit'; // Addons ONLY for deposit
-      const totalAmount = BASE_PRICE + (hasAddon ? ADDON_PRICE : 0);
-
-      console.log(`💰 ${paymentType}: $${totalAmount.toFixed(2)}`);
+      if (totalAmount < 0.50) {
+        return res.status(400).json({ error: 'Amount too small (min $0.50)' });
+      }
 
       // Clerk verify
       await safeClerkVerify(clerkUserId).catch(() => {
@@ -142,14 +178,13 @@ export default async function handler(req, res) {
       const snapshotVal = snapshot.val();
       const entryKey = Object.keys(snapshotVal)[0];
 
-      // 🔥 PAYMENT PATH BY TYPE
       const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
       const existingPayment = snapshotVal[entryKey]?.[paymentPath];
 
       let paymentIntent;
       let intentAction = 'created';
 
-      // Reuse existing intent (unchanged logic)
+      // Reuse existing intent
       if (existingPayment?.stripePaymentIntentId) {
         try {
           paymentIntent = await stripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
@@ -157,7 +192,7 @@ export default async function handler(req, res) {
 
           if (canUpdate) {
             const existingAmount = paymentIntent.amount / 100;
-            if (existingAmount === totalAmount) {
+            if (Math.abs(existingAmount - totalAmount) < 0.01) {
               intentAction = 'reused';
             } else {
               intentAction = 'updated';
@@ -165,8 +200,9 @@ export default async function handler(req, res) {
                 amount: Math.round(totalAmount * 100),
                 metadata: {
                   ...paymentIntent.metadata,
-                  paymentType, // NEW
+                  paymentType,
                   firebaseEntryKey: entryKey,
+                  dynamicAmount: totalAmount.toString(),
                   updatedAt: new Date().toISOString()
                 }
               });
@@ -188,14 +224,14 @@ export default async function handler(req, res) {
           metadata: {
             clerkUserId,
             firebaseEntryKey: entryKey,
-            paymentType,        // 🔥 CRITICAL
+            paymentType,
+            ...(paymentType === 'backer' && { dynamicAmount: totalAmount.toString() }),
             addons: JSON.stringify(addons),
-            baseAmount: BASE_PRICE.toString(),
             totalAmount: totalAmount.toString(),
             createdAt: new Date().toISOString()
           }
         });
-        console.log(`🚀 Created ${paymentType} intent: $${totalAmount}`);
+        console.log(`🚀 Created ${paymentType} intent: $${totalAmount.toFixed(2)}`);
       }
 
       // Update Firebase
@@ -203,9 +239,7 @@ export default async function handler(req, res) {
         sessionId: `${paymentType}_${Date.now()}`,
         stripePaymentIntentId: paymentIntent.id,
         amount: totalAmount,
-        baseAmount: BASE_PRICE,
-        addonAmount: hasAddon ? ADDON_PRICE : 0,
-        addons,
+        ...(paymentType === 'backer' && { pricePerFoot: totalAmount }),
         paymentStatus: 'pending',
         paymentType,
         lastUpdated: Date.now(),

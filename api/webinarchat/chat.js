@@ -57,9 +57,10 @@ export default async function handler(req, res) {
         .orderByChild('timestamp')
         .limitToLast(50)
         .once('value');
-
+      console.log("DB URL:", process.env.FIREBASE_URL);
       const messages = [];
-      snapshot.forEach(snap => messages.unshift(snap.val()));
+
+      snapshot.forEach(snap => messages.push(snap.val()));
 
       res.json({ success: true, messages, count: messages.length });
     }
