@@ -5,7 +5,7 @@ const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
   credential: cert(serviceAccount),
   //databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/"
-    databaseURL:process.env.FIREBASE_URL
+  databaseURL: process.env.FIREBASE_URL
 });
 const db = getDatabase(app);
 
@@ -62,6 +62,9 @@ async function handleUserData(req, res, clerkUserId) {
   let earlyAppStatus = { earlyAppStatus: 'No', selectApplication: '0', isFounder: 'No', date: 'January 2027' };
   let hasCompleteData = false;
 
+  // 🔥 NEW: Track latest backerPayment
+  let latestBackerPayment = null;
+
   if (mainformSnapshot.exists()) {
     mainformSnapshot.forEach((childSnapshot) => {
       const data = childSnapshot.val();
@@ -71,11 +74,23 @@ async function handleUserData(req, res, clerkUserId) {
         unitReservations = data.PaymentFormData.unit;
       }
 
-      if (data.stripePayment?.paymentStatus === "success") {
-        earlyAppStatus = { earlyAppStatus: 'Yes', selectApplication: '99', date: 'July 2025', isFounder: earlyAppStatus.isFounder };
+      // 🔥 CAPTURE COMPLETE backerPayment object
+      if (data.backerPayment) {
+        latestBackerPayment = data.backerPayment;  // Full object!
       }
-    earlyAppStatus.isFounder = data?.isFounder ? 'Yes' : 'No';
 
+      // Check ANY payment for early access
+      if (data.stripePayment?.paymentStatus === "success" ||
+          data.backerPayment?.paymentStatus === "success") {
+        earlyAppStatus = {
+          earlyAppStatus: 'Yes',
+          selectApplication: '99',
+          date: 'July 2025',
+          isFounder: earlyAppStatus.isFounder
+        };
+      }
+
+      earlyAppStatus.isFounder = data?.isFounder ? 'Yes' : 'No';
     });
   }
 
@@ -86,10 +101,14 @@ async function handleUserData(req, res, clerkUserId) {
       unitReservations,
       earlyAppStatus,
       hasMainformData: mainformSnapshot.exists(),
-      hasCompleteData
+      hasCompleteData,
+
+      // 🔥 FULL backerPayment object to frontend!
+      backerPayment: latestBackerPayment
     }
   });
 }
+
 
 // ======================
 // UPDATE PROFILE (Original update-profile.js)
