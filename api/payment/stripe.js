@@ -106,35 +106,44 @@ export default async function handler(req, res) {
   }
 
   // 🔥 NEW: DYNAMIC BACKER PRICING FROM paymentFormData/priceperfoot
-  if (req.method === 'GET' && req.query.backerPricing) {
-    try {
-      const { clerkUserId } = req.query;
-      if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
+  // 🔥 DYNAMIC BACKER PRICING (FIXED CASE)
+if (req.method === 'GET' && req.query.backerPricing) {
+  try {
+    const { clerkUserId } = req.query;
+    if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
 
-      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
-      if (!snapshot.exists()) return res.status(404).json({ error: 'No user data found for uid' });
+    const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+    if (!snapshot.exists()) return res.status(404).json({ error: 'No user data found for uid' });
 
-      const snapshotVal = snapshot.val();
-      const entryKey = Object.keys(snapshotVal)[0];
-      const paymentFormData = snapshotVal[entryKey]?.paymentFormData;
+    const snapshotVal = snapshot.val();
+    const entryKey = Object.keys(snapshotVal)[0]; // "1771929864599"
 
-      const backerPrice = parseFloat(paymentFormData?.priceperfoot) || 0;
-      if (backerPrice === 0) return res.status(404).json({ error: 'No priceperfoot in paymentFormData' });
+    // 🔥 EXACT PATH MATCH - Your structure has PaymentFormData (capital P,F,D)
+    const paymentFormData = snapshotVal[entryKey]?.PaymentFormData; // Capitalized!
 
-      console.log(`💰 User ${clerkUserId} (${entryKey}): $${backerPrice.toFixed(2)} from priceperfoot`);
+    console.log('🔍 Found entry:', entryKey, 'PaymentFormData:', !!paymentFormData); // Debug
 
-      res.json({
-        backerPrice,  // Direct final price: 1574.1 → $1,574.10
-        entryKey,
-        pricePerFootRaw: paymentFormData.priceperfoot,
-        currency: 'usd'
-      });
-    } catch (error) {
-      console.error('❌ Backer pricing error:', error);
-      res.status(500).json({ error: 'Pricing fetch failed' });
+    const backerPrice = parseFloat(paymentFormData?.priceperfoot) || 0;
+    if (backerPrice === 0) {
+      console.log('❌ priceperfoot missing:', paymentFormData); // Debug
+      return res.status(404).json({ error: 'No priceperfoot in PaymentFormData' });
     }
-    return;
+
+    console.log(`💰 User ${clerkUserId} (${entryKey}): $${backerPrice.toFixed(2)}`);
+
+    res.json({
+      backerPrice,
+      entryKey,
+      pricePerFootRaw: paymentFormData.priceperfoot,
+      currency: 'usd'
+    });
+  } catch (error) {
+    console.error('❌ Backer pricing error:', error);
+    res.status(500).json({ error: 'Pricing fetch failed' });
   }
+  return; // CRITICAL: Add return!
+}
+
 
   // 🔥 CREATE PAYMENT INTENT (BOTH TYPES - NOW DYNAMIC FOR BACKER)
   if (req.method === 'POST') {
