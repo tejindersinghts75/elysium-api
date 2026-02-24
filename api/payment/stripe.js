@@ -105,7 +105,7 @@ export default async function handler(req, res) {
     });
   }
 
-  // 🔥 NEW: DYNAMIC BACKER PRICING FROM paymentFormData/pricePerFoot
+  // 🔥 NEW: DYNAMIC BACKER PRICING FROM paymentFormData/priceperfoot
   if (req.method === 'GET' && req.query.backerPricing) {
     try {
       const { clerkUserId } = req.query;
@@ -118,15 +118,15 @@ export default async function handler(req, res) {
       const entryKey = Object.keys(snapshotVal)[0];
       const paymentFormData = snapshotVal[entryKey]?.paymentFormData;
 
-      const backerPrice = parseFloat(paymentFormData?.pricePerFoot) || 0;
-      if (backerPrice === 0) return res.status(404).json({ error: 'No pricePerFoot in paymentFormData' });
+      const backerPrice = parseFloat(paymentFormData?.priceperfoot) || 0;
+      if (backerPrice === 0) return res.status(404).json({ error: 'No priceperfoot in paymentFormData' });
 
-      console.log(`💰 User ${clerkUserId} (${entryKey}): $${backerPrice.toFixed(2)} from pricePerFoot`);
+      console.log(`💰 User ${clerkUserId} (${entryKey}): $${backerPrice.toFixed(2)} from priceperfoot`);
 
       res.json({
         backerPrice,  // Direct final price: 1574.1 → $1,574.10
         entryKey,
-        pricePerFootRaw: paymentFormData.pricePerFoot,
+        pricePerFootRaw: paymentFormData.priceperfoot,
         currency: 'usd'
       });
     } catch (error) {
@@ -147,7 +147,7 @@ export default async function handler(req, res) {
       // 🔥 DYNAMIC PRICING LOGIC
       let totalAmount;
       if (paymentType === 'backer' && dynamicAmount) {
-        // Use fetched pricePerFoot directly
+        // Use fetched priceperfoot directly
         totalAmount = parseFloat(dynamicAmount);
         console.log(`💰 Dynamic backer: $${totalAmount.toFixed(2)}`);
       } else {
@@ -239,7 +239,7 @@ export default async function handler(req, res) {
         sessionId: `${paymentType}_${Date.now()}`,
         stripePaymentIntentId: paymentIntent.id,
         amount: totalAmount,
-        ...(paymentType === 'backer' && { pricePerFoot: totalAmount }),
+        ...(paymentType === 'backer' && { priceperfoot: totalAmount }),
         paymentStatus: 'pending',
         paymentType,
         lastUpdated: Date.now(),
