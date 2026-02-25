@@ -211,34 +211,6 @@ export default async function handler(req, res) {
   }
 
   /* =====================================================
-     🔥 PAYMENT STATUS CHECK
-  ===================================================== */
-  if (req.method === 'GET' && (req.query.status || !req.query.backerPricing)) {
-    try {
-      const { clerkUserId, paymentType = 'deposit' } = req.query;
-      if (!clerkUserId) return res.status(400).json({ paymentStatus: 'unknown' });
-
-      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
-      if (!snapshot.exists()) return res.json({ paymentStatus: 'no_data' });
-
-      const snapshotVal = snapshot.val();
-      const entryKey = Object.keys(snapshotVal)[0];
-      const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
-      const paymentData = snapshotVal[entryKey]?.[paymentPath];
-
-      return res.json({
-        paymentStatus: paymentData?.paymentStatus || 'no_data',
-        paymentData,
-        entryKey,
-        paymentType,
-        paymentPath
-      });
-    } catch (error) {
-      console.error('❌ Status error:', error);
-      return res.status(200).json({ paymentStatus: 'error' });
-    }
-  }
-  /* =====================================================
    🔥 REFUND STATUS CHECK (30s TEST - FULLY FIXED)
 ======================================================== */
 if (req.method === 'GET' && req.query.refundStatus) {
@@ -315,6 +287,36 @@ if (req.method === 'GET' && req.query.refundStatus) {
     return res.status(500).json({ refundEligible: false });
   }
 }
+
+
+  /* =====================================================
+     🔥 PAYMENT STATUS CHECK
+  ===================================================== */
+  if (req.method === 'GET' && (req.query.status || !req.query.backerPricing)) {
+    try {
+      const { clerkUserId, paymentType = 'deposit' } = req.query;
+      if (!clerkUserId) return res.status(400).json({ paymentStatus: 'unknown' });
+
+      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+      if (!snapshot.exists()) return res.json({ paymentStatus: 'no_data' });
+
+      const snapshotVal = snapshot.val();
+      const entryKey = Object.keys(snapshotVal)[0];
+      const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
+      const paymentData = snapshotVal[entryKey]?.[paymentPath];
+
+      return res.json({
+        paymentStatus: paymentData?.paymentStatus || 'no_data',
+        paymentData,
+        entryKey,
+        paymentType,
+        paymentPath
+      });
+    } catch (error) {
+      console.error('❌ Status error:', error);
+      return res.status(200).json({ paymentStatus: 'error' });
+    }
+  }
 
 
 
