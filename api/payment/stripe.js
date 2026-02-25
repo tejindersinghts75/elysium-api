@@ -239,7 +239,7 @@ export default async function handler(req, res) {
     }
   }
   /* =====================================================
-   🔥 REFUND STATUS CHECK
+   🔥 REFUND STATUS CHECK (30-SECOND TEST MODE)
 ======================================================== */
 if (req.method === 'GET' && req.query.refundStatus) {
   try {
@@ -247,33 +247,64 @@ if (req.method === 'GET' && req.query.refundStatus) {
     if (!clerkUserId) return res.status(400).json({ refundEligible: false });
 
     const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
-    if (!snapshot.exists()) return res.json({ refundEligible: false, reason: 'no_user' });
+    if (!snapshot.exists()) return res.json({ refundEligible: true });
 
     const snapshotVal = snapshot.val();
     const entryKey = Object.keys(snapshotVal)[0];
     const backerData = snapshotVal[entryKey]?.backerPayment;
 
-    const windowStart = backerData?.refundWindowStart;
-    if (!windowStart || backerData?.refundStatus !== 'eligible') {
-      return res.json({ refundEligible: false, entryKey });
+    // No backer payment → show plans
+    if (!backerData || !backerData.paymentStatus) {
+      return res.json({
+        refundStatus: 'none',
+        refundEligible: false,
+        showPlans: true
+      });
     }
 
-    const now = Date.now();
-   // const windowEnd = windowStart + (90 * 24 * 60 * 60 * 1000);
-      const windowEnd = windowStart + (30 * 1000);
-    const expired = now >= windowEnd;
+    // Payment not success → show plans
+    if (backerData.paymentStatus !== 'success') {
+      return res.json({
+        refundStatus: 'failed',
+        refundEligible: false,
+        showPlans: true
+      });
+    }
+
+    const windowStart = backerData?.refundWindowStart;
+
+    // 🔥 AUTO-EXPIRE LOGIC (30 SECONDS FOR TESTING)
+    if (backerData.refundStatus === 'eligible' && windowStart) {
+      const windowEnd = windowStart + (30 * 1000); // ← 30 SECONDS FOR TESTING
+      const now = Date.now();
+
+      if (now >= windowEnd && backerData.refundStatus !== 'expired') {
+        // 🔥 UPDATE DB TO EXPIRED (happens once)
+        await db.ref(`Mainformdata/${entryKey}/backerPayment`).update({
+          refundStatus: 'expired',
+          refundWindowEnd: windowEnd,
+          expiredAt: now
+        });
+        console.log(`✅ Auto-expired ${entryKey} after 30s`);
+      }
+    }
+
+    // Final status from DB (now clean!)
+    const finalStatus = backerData.refundStatus;
 
     return res.json({
-      refundEligible: !expired,
-       daysLeft: Math.max(0, Math.ceil((windowEnd - now) / 1000)),
-    //  daysLeft: Math.max(0, Math.ceil((windowEnd - now) / (86400000))),
-      entryKey
+      refundStatus: finalStatus,
+      refundEligible: finalStatus === 'eligible',
+      entryKey,
+      ...(backerData.refundWindowEnd && { secondsAgo: Math.floor((now - backerData.refundWindowEnd) / 1000) })
     });
+
   } catch (error) {
-    console.error('❌ Refund status error:', error);
+    console.error('❌ Refund error:', error);
     return res.status(500).json({ refundEligible: false });
   }
 }
+
 
 
   /* =====================================================
