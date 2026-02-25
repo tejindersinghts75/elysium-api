@@ -239,7 +239,7 @@ export default async function handler(req, res) {
     }
   }
   /* =====================================================
-   🔥 REFUND STATUS CHECK (30-SECOND TEST MODE)
+   🔥 REFUND STATUS CHECK (30s TEST - FULLY FIXED)
 ======================================================== */
 if (req.method === 'GET' && req.query.refundStatus) {
   try {
@@ -251,7 +251,10 @@ if (req.method === 'GET' && req.query.refundStatus) {
 
     const snapshotVal = snapshot.val();
     const entryKey = Object.keys(snapshotVal)[0];
-    const backerData = snapshotVal[entryKey]?.backerPayment;
+
+    // 🔥 REFRESH DATA AFTER ANY POSSIBLE UPDATE
+    const backerSnapshot = await db.ref(`Mainformdata/${entryKey}/backerPayment`).once('value');
+    const backerData = backerSnapshot.val();
 
     // No backer payment → show plans
     if (!backerData || !backerData.paymentStatus) {
@@ -273,30 +276,38 @@ if (req.method === 'GET' && req.query.refundStatus) {
 
     const windowStart = backerData?.refundWindowStart;
 
-    // 🔥 AUTO-EXPIRE LOGIC (30 SECONDS FOR TESTING)
+    // 🔥 AUTO-EXPIRE LOGIC
     if (backerData.refundStatus === 'eligible' && windowStart) {
-      const windowEnd = windowStart + (30 * 1000); // ← 30 SECONDS FOR TESTING
+      const windowEnd = windowStart + (30 * 1000); // 30 SECONDS
       const now = Date.now();
 
-      if (now >= windowEnd && backerData.refundStatus !== 'expired') {
-        // 🔥 UPDATE DB TO EXPIRED (happens once)
+      if (now >= windowEnd) {
+        // 🔥 UPDATE DB TO EXPIRED
         await db.ref(`Mainformdata/${entryKey}/backerPayment`).update({
           refundStatus: 'expired',
           refundWindowEnd: windowEnd,
           expiredAt: now
         });
-        console.log(`✅ Auto-expired ${entryKey} after 30s`);
+        console.log(`✅ Auto-expired ${entryKey}`);
+
+        // 🔥 REFRESH DATA AGAIN (get updated status)
+        const updatedSnapshot = await db.ref(`Mainformdata/${entryKey}/backerPayment`).once('value');
+        const updatedData = updatedSnapshot.val();
+
+        return res.json({
+          refundStatus: updatedData.refundStatus,  // "expired"
+          refundEligible: updatedData.refundStatus === 'eligible',
+          entryKey,
+          testInfo: `Updated at ${new Date(now).toISOString()}`
+        });
       }
     }
 
-    // Final status from DB (now clean!)
-    const finalStatus = backerData.refundStatus;
-
+    // Normal case
     return res.json({
-      refundStatus: finalStatus,
-      refundEligible: finalStatus === 'eligible',
-      entryKey,
-      ...(backerData.refundWindowEnd && { secondsAgo: Math.floor((now - backerData.refundWindowEnd) / 1000) })
+      refundStatus: backerData.refundStatus,
+      refundEligible: backerData.refundStatus === 'eligible',
+      entryKey
     });
 
   } catch (error) {
