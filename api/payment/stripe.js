@@ -250,7 +250,8 @@ if (req.method === 'GET' && req.query.refundStatus) {
 
     // 🔥 AUTO-EXPIRE LOGIC
     if (backerData.refundStatus === 'eligible' && windowStart) {
-      const windowEnd = windowStart + (30 * 1000); // 30 SECONDS
+    //  const windowEnd = windowStart + (30 * 1000); // 30 SECONDS
+       const windowEnd = windowStart + (90 * 24 * 60 * 60 * 1000);
       const now = Date.now();
 
       if (now >= windowEnd) {
