@@ -4,7 +4,10 @@ import { getDatabase } from 'firebase-admin/database';
 import { createClerkClient } from '@clerk/backend';
 import { buffer } from 'micro';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: '2024-06-20'
+});
+
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
   credential: cert(serviceAccount),
@@ -13,12 +16,21 @@ const app = initializeApp({
 const db = getDatabase(app);
 const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY });
 
-export const config = {
-  api: {
-    bodyParser: false
-  }
+// 🔥 MASTER PLAN PRICES
+const PLAN_PRICES = {
+  loft: 1574.1,
+  studio: 2000,
+  "2bhk": 2500,
+  "4bhk": 3000
 };
 
+export const config = {
+  api: { bodyParser: false }
+};
+
+/* =========================
+   CLERK VERIFY
+========================= */
 async function safeClerkVerify(clerkUserId) {
   try {
     await clerkClient.users.getUser(clerkUserId);
@@ -34,6 +46,9 @@ async function safeClerkVerify(clerkUserId) {
   }
 }
 
+/* =========================
+   MAIN HANDLER - FULL FEATURED
+========================= */
 export default async function handler(req, res) {
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -45,7 +60,7 @@ export default async function handler(req, res) {
     return res.json({
       status: 'ok',
       timestamp: Date.now(),
-      supports: ['deposit', 'backer']
+      supports: ['deposit', 'backer', 'upgrade']
     });
   }
 
@@ -56,7 +71,9 @@ export default async function handler(req, res) {
 
   const signature = req.headers['stripe-signature'];
 
-  // 🔥 WEBHOOK - HANDLES BOTH $99 + DYNAMIC BACKER
+  /* =====================================================
+     🔥 STRIPE WEBHOOK (DEPOSIT + BACKER + UPGRADE)
+  ===================================================== */
   if (signature) {
     try {
       const body = await buffer(req);
@@ -67,118 +84,166 @@ export default async function handler(req, res) {
         const paymentIntent = event.data.object;
         const { firebaseEntryKey, paymentType } = paymentIntent.metadata;
 
-        if (firebaseEntryKey && paymentType) {
-          const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
+        if (!firebaseEntryKey || !paymentType) {
+          console.log('⚠️ Missing metadata, skipping');
+          return res.json({ received: true });
+        }
 
-          const updateData = {
-            paymentStatus: event.type === 'payment_intent.succeeded' ? 'success' : 'failed',
-            stripeChargeId: paymentIntent.latest_charge,
-            processedAt: Date.now(),
-            stripePaymentIntentId: paymentIntent.id,
-            lastWebhookEvent: event.type,
-            paymentType
-          };
+        const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
+        const updateData = {
+          paymentStatus: event.type === 'payment_intent.succeeded' ? 'success' : 'failed',
+          stripeChargeId: paymentIntent.latest_charge,
+          stripePaymentIntentId: paymentIntent.id,
+          processedAt: Date.now(),
+          lastWebhookEvent: event.type,
+          paymentType
+        };
 
-          if (event.type === 'payment_intent.payment_failed') {
-            updateData.error = paymentIntent.last_payment_error?.message || 'Payment failed';
-          }
+        if (event.type === 'payment_intent.payment_failed') {
+          updateData.error = paymentIntent.last_payment_error?.message || 'Payment failed';
+        }
 
-          await db.ref(`Mainformdata/${firebaseEntryKey}/${paymentPath}`).update(updateData);
-          console.log(`✅ Webhook ${paymentType} ${paymentPath}: ${firebaseEntryKey}`);
+        await db.ref(`Mainformdata/${firebaseEntryKey}/${paymentPath}`).update(updateData);
+        console.log(`✅ Webhook ${paymentType}: ${firebaseEntryKey}`);
+
+        /* 🔥 PLAN UPGRADE HANDLER */
+        if (event.type === 'payment_intent.succeeded' && paymentIntent.metadata?.upgrade === "true") {
+          const targetPlan = paymentIntent.metadata.targetPlan;
+          const newPlanPrice = parseFloat(paymentIntent.metadata.newPlanPrice);
+
+          const userRef = db.ref(`Mainformdata/${firebaseEntryKey}`);
+          const snap = await userRef.once('value');
+          const userData = snap.val();
+          const oldPlanPrice = parseFloat(userData?.PaymentFormData?.priceperfoot || 0);
+
+          // Update current plan
+          await userRef.child('PaymentFormData').update({
+            priceperfoot: newPlanPrice,
+            selectedPlan: targetPlan
+          });
+
+          // Set full backer amount
+          await userRef.child('backerPayment').update({
+            amount: newPlanPrice,
+            lastWebhookEvent: "upgrade_success"
+          });
+
+          // Upgrade history
+          await userRef.child(`upgradeHistory/${Date.now()}`).set({
+            fromPlanPrice: oldPlanPrice,
+            toPlan: targetPlan,
+            newPlanPrice,
+            upgradePaid: paymentIntent.amount / 100,
+            upgradedAt: Date.now(),
+            stripePaymentIntentId: paymentIntent.id
+          });
+
+          console.log(`✅ UPGRADE → ${targetPlan} ($${newPlanPrice})`);
         }
       }
 
-      res.json({ received: true });
+      return res.json({ received: true });
     } catch (error) {
-      console.error('❌ Webhook error:', error);
-      res.status(400).json({ error: 'Webhook error' });
+      console.error('❌ Webhook error:', error.message);
+      return res.status(400).json({ error: 'Webhook error' });
     }
-    return;
   }
 
-  // 🔥 STATIC PRICING (deposit + addon)
+  /* =====================================================
+     🔥 STATIC PRICING ENDPOINT
+  ===================================================== */
   if (req.method === 'GET' && req.query.pricing) {
     return res.json({
       deposit: 99.00,
-      backer: 2000.00,  // Fallback only
-      addon: 29.95
+      backer: 2000.00,  // Fallback
+      addon: 29.95,
+      plans: PLAN_PRICES
     });
   }
 
-  // 🔥 NEW: DYNAMIC BACKER PRICING FROM paymentFormData/priceperfoot
-  // 🔥 DYNAMIC BACKER PRICING (FIXED CASE)
-if (req.method === 'GET' && req.query.backerPricing) {
-  try {
-    const { clerkUserId } = req.query;
-    if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
+  /* =====================================================
+     🔥 DYNAMIC BACKER PRICING (from Firebase)
+  ===================================================== */
+  if (req.method === 'GET' && req.query.backerPricing) {
+    try {
+      const { clerkUserId } = req.query;
+      if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
 
-    const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
-    if (!snapshot.exists()) return res.status(404).json({ error: 'No user data found for uid' });
+      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+      if (!snapshot.exists()) return res.status(404).json({ error: 'No user data' });
 
-    const snapshotVal = snapshot.val();
-    const entryKey = Object.keys(snapshotVal)[0]; // "1771929864599"
+      const snapshotVal = snapshot.val();
+      const entryKey = Object.keys(snapshotVal)[0];
+      const paymentFormData = snapshotVal[entryKey]?.PaymentFormData;
 
-    // 🔥 EXACT PATH MATCH - Your structure has PaymentFormData (capital P,F,D)
-    const paymentFormData = snapshotVal[entryKey]?.PaymentFormData; // Capitalized!
+      const backerPrice = parseFloat(paymentFormData?.priceperfoot) || 0;
+      if (backerPrice === 0) {
+        return res.status(404).json({ error: 'No priceperfoot found' });
+      }
 
-    console.log('🔍 Found entry:', entryKey, 'PaymentFormData:', !!paymentFormData); // Debug
-
-    const backerPrice = parseFloat(paymentFormData?.priceperfoot) || 0;
-    if (backerPrice === 0) {
-      console.log('❌ priceperfoot missing:', paymentFormData); // Debug
-      return res.status(404).json({ error: 'No priceperfoot in PaymentFormData' });
+      console.log(`💰 Backer pricing: $${backerPrice.toFixed(2)}`);
+      return res.json({
+        backerPrice,
+        entryKey,
+        pricePerFootRaw: paymentFormData.priceperfoot,
+        currency: 'usd'
+      });
+    } catch (error) {
+      console.error('❌ Pricing error:', error);
+      return res.status(500).json({ error: 'Pricing fetch failed' });
     }
-
-    console.log(`💰 User ${clerkUserId} (${entryKey}): $${backerPrice.toFixed(2)}`);
-
-    res.json({
-      backerPrice,
-      entryKey,
-      pricePerFootRaw: paymentFormData.priceperfoot,
-      currency: 'usd'
-    });
-  } catch (error) {
-    console.error('❌ Backer pricing error:', error);
-    res.status(500).json({ error: 'Pricing fetch failed' });
   }
-  return; // CRITICAL: Add return!
-}
 
+  /* =====================================================
+     🔥 PAYMENT STATUS CHECK
+  ===================================================== */
+  if (req.method === 'GET' && (req.query.status || !req.query.backerPricing)) {
+    try {
+      const { clerkUserId, paymentType = 'deposit' } = req.query;
+      if (!clerkUserId) return res.status(400).json({ paymentStatus: 'unknown' });
 
-  // 🔥 CREATE PAYMENT INTENT (BOTH TYPES - NOW DYNAMIC FOR BACKER)
+      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+      if (!snapshot.exists()) return res.json({ paymentStatus: 'no_data' });
+
+      const snapshotVal = snapshot.val();
+      const entryKey = Object.keys(snapshotVal)[0];
+      const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
+      const paymentData = snapshotVal[entryKey]?.[paymentPath];
+
+      return res.json({
+        paymentStatus: paymentData?.paymentStatus || 'no_data',
+        paymentData,
+        entryKey,
+        paymentType,
+        paymentPath
+      });
+    } catch (error) {
+      console.error('❌ Status error:', error);
+      return res.status(200).json({ paymentStatus: 'error' });
+    }
+  }
+
+  /* =====================================================
+     🔥 CREATE PAYMENT INTENT (DEPOSIT/BACKER/UPGRADE)
+  ===================================================== */
   if (req.method === 'POST') {
     try {
       const body = await buffer(req);
-      const { clerkUserId, paymentType = 'deposit', addons = [], dynamicAmount } = JSON.parse(body.toString());
+      const {
+        clerkUserId,
+        paymentType = 'deposit',
+        addons = [],
+        dynamicAmount,
+        targetPlan  // 🔥 UPGRADE SUPPORT
+      } = JSON.parse(body.toString());
 
-      console.log(`🔍 ${paymentType} for user ${clerkUserId}, dynamicAmount: ${dynamicAmount}`);
-
-      // 🔥 DYNAMIC PRICING LOGIC
-      let totalAmount;
-      if (paymentType === 'backer' && dynamicAmount) {
-        // Use fetched priceperfoot directly
-        totalAmount = parseFloat(dynamicAmount);
-        console.log(`💰 Dynamic backer: $${totalAmount.toFixed(2)}`);
-      } else {
-        // Static deposit pricing
-        const PRICES = { deposit: 99.00 };
-        const BASE_PRICE = PRICES[paymentType] || 99.00;
-        const ADDON_PRICE = 29.95;
-        const hasAddon = addons.length > 0 && paymentType === 'deposit';
-        totalAmount = BASE_PRICE + (hasAddon ? ADDON_PRICE : 0);
-        console.log(`💰 ${paymentType}: $${totalAmount.toFixed(2)}`);
+      if (!clerkUserId) {
+        return res.status(400).json({ error: 'Missing clerkUserId' });
       }
 
-      if (totalAmount < 0.50) {
-        return res.status(400).json({ error: 'Amount too small (min $0.50)' });
-      }
+      console.log(`🔍 ${paymentType} for ${clerkUserId}, targetPlan: ${targetPlan}`);
 
-      // Clerk verify
-      await safeClerkVerify(clerkUserId).catch(() => {
-        console.log('⚠️ Skipping Clerk check');
-      });
-
-      // Find Mainformdata entry
+      // 🔥 FETCH USER FIRST
       const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
       if (!snapshot.exists()) {
         return res.status(404).json({ error: 'No user data found' });
@@ -186,14 +251,59 @@ if (req.method === 'GET' && req.query.backerPricing) {
 
       const snapshotVal = snapshot.val();
       const entryKey = Object.keys(snapshotVal)[0];
+      const userData = snapshotVal[entryKey];
+
+      // 🔥 PRICING LOGIC
+      let totalAmount;
+
+      /* UPGRADE */
+      if (paymentType === 'backer' && targetPlan) {
+        const currentPaid = parseFloat(userData?.backerPayment?.amount || 0);
+        const newPlanPrice = PLAN_PRICES[targetPlan];
+
+        if (!newPlanPrice) {
+          return res.status(400).json({ error: 'Invalid plan' });
+        }
+
+        const upgradeAmount = newPlanPrice - currentPaid;
+        if (upgradeAmount <= 0) {
+          return res.status(400).json({ error: 'Nothing to upgrade' });
+        }
+
+        totalAmount = upgradeAmount;
+        console.log(`🔼 Upgrade charge: $${upgradeAmount.toFixed(2)}`);
+      }
+      /* FIRST FULL BACKER */
+      else if (paymentType === 'backer') {
+        const dbPrice = parseFloat(userData?.PaymentFormData?.priceperfoot || 0);
+        if (!dbPrice) {
+          return res.status(400).json({ error: 'No unit price in DB' });
+        }
+        totalAmount = dbPrice;
+      }
+      /* DEPOSIT */
+      else {
+        const BASE_PRICE = 99.00;
+        const ADDON_PRICE = 29.95;
+        totalAmount = BASE_PRICE + (addons.length ? ADDON_PRICE : 0);
+      }
+
+      if (totalAmount < 0.50) {
+        return res.status(400).json({ error: 'Amount too small' });
+      }
+
+      // Clerk verify
+      await safeClerkVerify(clerkUserId).catch(() => {
+        console.log('⚠️ Clerk check skipped');
+      });
 
       const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
-      const existingPayment = snapshotVal[entryKey]?.[paymentPath];
+      const existingPayment = userData?.[paymentPath];
 
       let paymentIntent;
       let intentAction = 'created';
 
-      // Reuse existing intent
+      // 🔥 REUSE EXISTING INTENT (your original logic)
       if (existingPayment?.stripePaymentIntentId) {
         try {
           paymentIntent = await stripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
@@ -211,7 +321,11 @@ if (req.method === 'GET' && req.query.backerPricing) {
                   ...paymentIntent.metadata,
                   paymentType,
                   firebaseEntryKey: entryKey,
-                  dynamicAmount: totalAmount.toString(),
+                  ...(targetPlan && {
+                    upgrade: "true",
+                    targetPlan,
+                    newPlanPrice: PLAN_PRICES[targetPlan]?.toString()
+                  }),
                   updatedAt: new Date().toISOString()
                 }
               });
@@ -220,12 +334,12 @@ if (req.method === 'GET' && req.query.backerPricing) {
             paymentIntent = null;
           }
         } catch (error) {
-          console.log('⚠️ Existing intent error:', error.message);
+          console.log('⚠️ Intent reuse failed:', error.message);
           paymentIntent = null;
         }
       }
 
-      // Create new intent
+      // 🔥 CREATE NEW INTENT
       if (!paymentIntent) {
         paymentIntent = await stripe.paymentIntents.create({
           amount: Math.round(totalAmount * 100),
@@ -234,28 +348,33 @@ if (req.method === 'GET' && req.query.backerPricing) {
             clerkUserId,
             firebaseEntryKey: entryKey,
             paymentType,
+            ...(targetPlan && {
+              upgrade: "true",
+              targetPlan,
+              newPlanPrice: PLAN_PRICES[targetPlan]?.toString()
+            }),
             ...(paymentType === 'backer' && { dynamicAmount: totalAmount.toString() }),
             addons: JSON.stringify(addons),
             totalAmount: totalAmount.toString(),
             createdAt: new Date().toISOString()
           }
         });
-        console.log(`🚀 Created ${paymentType} intent: $${totalAmount.toFixed(2)}`);
+        console.log(`🚀 ${intentAction} ${paymentType}: $${totalAmount.toFixed(2)}`);
       }
 
-      // Update Firebase
+      // 🔥 SAVE TO FIREBASE
       await db.ref(`Mainformdata/${entryKey}/${paymentPath}`).update({
         sessionId: `${paymentType}_${Date.now()}`,
         stripePaymentIntentId: paymentIntent.id,
         amount: totalAmount,
-        ...(paymentType === 'backer' && { priceperfoot: totalAmount }),
+        ...(paymentType === 'backer' && !targetPlan && { priceperfoot: totalAmount }),
         paymentStatus: 'pending',
         paymentType,
         lastUpdated: Date.now(),
         intentAction
       });
 
-      res.json({
+      return res.json({
         success: true,
         clientSecret: paymentIntent.client_secret,
         entryKey,
@@ -267,44 +386,10 @@ if (req.method === 'GET' && req.query.backerPricing) {
 
     } catch (error) {
       console.error('❌ POST error:', error.message);
-      res.status(500).json({ error: 'Payment setup failed', details: error.message });
+      return res.status(500).json({ error: 'Payment setup failed', details: error.message });
     }
-    return;
   }
 
-  // 🔥 STATUS CHECK (BOTH TYPES)
-  if (req.method === 'GET') {
-    try {
-      const { clerkUserId, paymentType = 'deposit' } = req.query;
-
-      if (!clerkUserId) {
-        return res.status(400).json({ paymentStatus: 'unknown' });
-      }
-
-      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
-      if (!snapshot.exists()) {
-        return res.json({ paymentStatus: 'no_data' });
-      }
-
-      const snapshotVal = snapshot.val();
-      const entryKey = Object.keys(snapshotVal)[0];
-      const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
-      const paymentData = snapshotVal[entryKey]?.[paymentPath];
-      const paymentStatus = paymentData?.paymentStatus || 'no_data';
-
-      res.json({
-        paymentStatus,
-        paymentData,
-        entryKey,
-        paymentType,
-        paymentPath
-      });
-    } catch (error) {
-      console.error('❌ GET error:', error.message);
-      res.status(200).json({ paymentStatus: 'error' });
-    }
-    return;
-  }
-
-  res.status(405).json({ error: 'Method not allowed' });
+  // 405 for everything else
+  return res.status(405).json({ error: 'Method not allowed' });
 }
