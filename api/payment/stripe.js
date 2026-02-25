@@ -259,12 +259,14 @@ if (req.method === 'GET' && req.query.refundStatus) {
     }
 
     const now = Date.now();
-    const windowEnd = windowStart + (90 * 24 * 60 * 60 * 1000);
+   // const windowEnd = windowStart + (90 * 24 * 60 * 60 * 1000);
+      const windowEnd = windowStart + (30 * 1000);
     const expired = now >= windowEnd;
 
     return res.json({
       refundEligible: !expired,
-      daysLeft: Math.max(0, Math.ceil((windowEnd - now) / (86400000))),
+       daysLeft: Math.max(0, Math.ceil((windowEnd - now) / 1000)),
+    //  daysLeft: Math.max(0, Math.ceil((windowEnd - now) / (86400000))),
       entryKey
     });
   } catch (error) {
