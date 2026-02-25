@@ -98,6 +98,8 @@ export default async function handler(req, res) {
           processedAt: Date.now(),
           lastWebhookEvent: event.type,
           paymentType
+
+
         };
 
 
@@ -107,6 +109,18 @@ export default async function handler(req, res) {
 
         await db.ref(`Mainformdata/${firebaseEntryKey}/${paymentPath}`).update(updateData);
         console.log(`✅ Webhook ${paymentType}: ${firebaseEntryKey}`);
+
+        // 🔥 CORRECT - FIRST TIME ONLY
+        if (paymentType === 'backer' && event.type === 'payment_intent.succeeded') {
+          const backerRef = db.ref(`Mainformdata/${firebaseEntryKey}/backerPayment`);
+          const snap = await backerRef.once('value');
+          if (!snap.val()?.refundWindowStart) {  // ← CHECK EXISTS
+            await backerRef.update({
+              refundWindowStart: Date.now(),
+              refundStatus: 'eligible'
+            });
+          }
+        }
 
         /* 🔥 PLAN UPGRADE HANDLER */
         if (event.type === 'payment_intent.succeeded' && paymentIntent.metadata?.upgrade === "true") {
@@ -224,6 +238,41 @@ export default async function handler(req, res) {
       return res.status(200).json({ paymentStatus: 'error' });
     }
   }
+  /* =====================================================
+   🔥 REFUND STATUS CHECK
+======================================================== */
+if (req.method === 'GET' && req.query.refundStatus) {
+  try {
+    const { clerkUserId } = req.query;
+    if (!clerkUserId) return res.status(400).json({ refundEligible: false });
+
+    const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+    if (!snapshot.exists()) return res.json({ refundEligible: false, reason: 'no_user' });
+
+    const snapshotVal = snapshot.val();
+    const entryKey = Object.keys(snapshotVal)[0];
+    const backerData = snapshotVal[entryKey]?.backerPayment;
+
+    const windowStart = backerData?.refundWindowStart;
+    if (!windowStart || backerData?.refundStatus !== 'eligible') {
+      return res.json({ refundEligible: false, entryKey });
+    }
+
+    const now = Date.now();
+    const windowEnd = windowStart + (90 * 24 * 60 * 60 * 1000);
+    const expired = now >= windowEnd;
+
+    return res.json({
+      refundEligible: !expired,
+      daysLeft: Math.max(0, Math.ceil((windowEnd - now) / (86400000))),
+      entryKey
+    });
+  } catch (error) {
+    console.error('❌ Refund status error:', error);
+    return res.status(500).json({ refundEligible: false });
+  }
+}
+
 
   /* =====================================================
      🔥 CREATE PAYMENT INTENT (DEPOSIT/BACKER/UPGRADE)
