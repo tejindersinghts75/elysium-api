@@ -363,16 +363,16 @@ export default async function handler(req, res) {
       }
 
       // 🔥 SAVE TO FIREBASE
-      await db.ref(`Mainformdata/${entryKey}/${paymentPath}`).update({
-        sessionId: `${paymentType}_${Date.now()}`,
-        stripePaymentIntentId: paymentIntent.id,
-        amount: totalAmount,
-        ...(paymentType === 'backer' && !targetPlan && { priceperfoot: totalAmount }),
-        paymentStatus: 'pending',
-        paymentType,
-        lastUpdated: Date.now(),
-        intentAction
-      });
+      // await db.ref(`Mainformdata/${entryKey}/${paymentPath}`).update({
+      //   sessionId: `${paymentType}_${Date.now()}`,
+      //   stripePaymentIntentId: paymentIntent.id,
+      //   amount: totalAmount,
+      //   ...(paymentType === 'backer' && !targetPlan && { priceperfoot: totalAmount }),
+      //   paymentStatus: 'pending',
+      //   paymentType,
+      //   lastUpdated: Date.now(),
+      //   intentAction
+      // });
 
       return res.json({
         success: true,
