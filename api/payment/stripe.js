@@ -213,81 +213,81 @@ export default async function handler(req, res) {
   /* =====================================================
    🔥 REFUND STATUS CHECK (30s TEST - FULLY FIXED)
 ======================================================== */
-if (req.method === 'GET' && req.query.refundStatus) {
-  try {
-    const { clerkUserId } = req.query;
-    if (!clerkUserId) return res.status(400).json({ refundEligible: false });
+  if (req.method === 'GET' && req.query.refundStatus) {
+    try {
+      const { clerkUserId } = req.query;
+      if (!clerkUserId) return res.status(400).json({ refundEligible: false });
 
-    const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
-    if (!snapshot.exists()) return res.json({ refundEligible: true });
+      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+      if (!snapshot.exists()) return res.json({ refundEligible: true });
 
-    const snapshotVal = snapshot.val();
-    const entryKey = Object.keys(snapshotVal)[0];
+      const snapshotVal = snapshot.val();
+      const entryKey = Object.keys(snapshotVal)[0];
 
-    // 🔥 REFRESH DATA AFTER ANY POSSIBLE UPDATE
-    const backerSnapshot = await db.ref(`Mainformdata/${entryKey}/backerPayment`).once('value');
-    const backerData = backerSnapshot.val();
+      // 🔥 REFRESH DATA AFTER ANY POSSIBLE UPDATE
+      const backerSnapshot = await db.ref(`Mainformdata/${entryKey}/backerPayment`).once('value');
+      const backerData = backerSnapshot.val();
 
-    // No backer payment → show plans
-    if (!backerData || !backerData.paymentStatus) {
-      return res.json({
-        refundStatus: 'none',
-        refundEligible: false,
-        showPlans: true
-      });
-    }
-
-    // Payment not success → show plans
-    if (backerData.paymentStatus !== 'success') {
-      return res.json({
-        refundStatus: 'failed',
-        refundEligible: false,
-        showPlans: true
-      });
-    }
-
-    const windowStart = backerData?.refundWindowStart;
-
-    // 🔥 AUTO-EXPIRE LOGIC
-    if (backerData.refundStatus === 'eligible' && windowStart) {
-    //  const windowEnd = windowStart + (30 * 1000); // 30 SECONDS
-       const windowEnd = windowStart + (90 * 24 * 60 * 60 * 1000);
-      const now = Date.now();
-
-      if (now >= windowEnd) {
-        // 🔥 UPDATE DB TO EXPIRED
-        await db.ref(`Mainformdata/${entryKey}/backerPayment`).update({
-          refundStatus: 'expired',
-          refundWindowEnd: windowEnd,
-          expiredAt: now
-        });
-        console.log(`✅ Auto-expired ${entryKey}`);
-
-        // 🔥 REFRESH DATA AGAIN (get updated status)
-        const updatedSnapshot = await db.ref(`Mainformdata/${entryKey}/backerPayment`).once('value');
-        const updatedData = updatedSnapshot.val();
-
+      // No backer payment → show plans
+      if (!backerData || !backerData.paymentStatus) {
         return res.json({
-          refundStatus: updatedData.refundStatus,  // "expired"
-          refundEligible: updatedData.refundStatus === 'eligible',
-          entryKey,
-          testInfo: `Updated at ${new Date(now).toISOString()}`
+          refundStatus: 'none',
+          refundEligible: false,
+          showPlans: true
         });
       }
+
+      // Payment not success → show plans
+      if (backerData.paymentStatus !== 'success') {
+        return res.json({
+          refundStatus: 'failed',
+          refundEligible: false,
+          showPlans: true
+        });
+      }
+
+      const windowStart = backerData?.refundWindowStart;
+
+      // 🔥 AUTO-EXPIRE LOGIC
+      if (backerData.refundStatus === 'eligible' && windowStart) {
+        //  const windowEnd = windowStart + (30 * 1000); // 30 SECONDS
+        const windowEnd = windowStart + (90 * 24 * 60 * 60 * 1000);
+        const now = Date.now();
+
+        if (now >= windowEnd) {
+          // 🔥 UPDATE DB TO EXPIRED
+          await db.ref(`Mainformdata/${entryKey}/backerPayment`).update({
+            refundStatus: 'expired',
+            refundWindowEnd: windowEnd,
+            expiredAt: now
+          });
+          console.log(`✅ Auto-expired ${entryKey}`);
+
+          // 🔥 REFRESH DATA AGAIN (get updated status)
+          const updatedSnapshot = await db.ref(`Mainformdata/${entryKey}/backerPayment`).once('value');
+          const updatedData = updatedSnapshot.val();
+
+          return res.json({
+            refundStatus: updatedData.refundStatus,  // "expired"
+            refundEligible: updatedData.refundStatus === 'eligible',
+            entryKey,
+            testInfo: `Updated at ${new Date(now).toISOString()}`
+          });
+        }
+      }
+
+      // Normal case
+      return res.json({
+        refundStatus: backerData.refundStatus,
+        refundEligible: backerData.refundStatus === 'eligible',
+        entryKey
+      });
+
+    } catch (error) {
+      console.error('❌ Refund error:', error);
+      return res.status(500).json({ refundEligible: false });
     }
-
-    // Normal case
-    return res.json({
-      refundStatus: backerData.refundStatus,
-      refundEligible: backerData.refundStatus === 'eligible',
-      entryKey
-    });
-
-  } catch (error) {
-    console.error('❌ Refund error:', error);
-    return res.status(500).json({ refundEligible: false });
   }
-}
 
 
   /* =====================================================
@@ -316,6 +316,55 @@ if (req.method === 'GET' && req.query.refundStatus) {
     } catch (error) {
       console.error('❌ Status error:', error);
       return res.status(200).json({ paymentStatus: 'error' });
+    }
+  }
+
+  /* =====================================================
+     🔥 BUILDER PLAN SAVE ← PASTE HERE
+  ===================================================== */
+  if (req.method === 'POST' && req.query.save === 'builder-plan') {
+    try {
+      const body = await buffer(req);
+      const {
+        clerkUserId,
+        planType,
+        months,
+        totalBuilderAmount,
+        backerAmount,
+        installmentAmount,
+        schedule
+      } = JSON.parse(body.toString());
+
+      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+      if (!snapshot.exists()) return res.status(404).json({ error: 'No user data' });
+
+      const snapshotVal = snapshot.val();
+      const entryKey = Object.keys(snapshotVal)[0];
+
+      await db.ref(`Mainformdata/${entryKey}/builderPlan`).set({
+        planType,
+        ...(months && { months }),
+        totalBuilderAmount: parseFloat(totalBuilderAmount),
+        backerAmount: parseFloat(backerAmount),
+        installmentAmount: parseFloat(installmentAmount),
+        schedule: schedule.map(p => ({ date: p.date, amount: parseFloat(p.amount) })),
+        installmentsRemaining: schedule.length,
+        nextDue: schedule[0]?.date,
+        status: 'active',
+        createdAt: Date.now()
+      });
+
+      console.log(`✅ Builder plan saved: ${entryKey}`);
+      return res.json({
+        success: true,
+        entryKey,
+        nextPayment: schedule[0],
+        totalRemaining: schedule.length
+      });
+
+    } catch (error) {
+      console.error('❌ Builder save error:', error);
+      return res.status(500).json({ error: 'Builder plan save failed' });
     }
   }
 
