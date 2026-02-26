@@ -467,8 +467,9 @@ export default async function handler(req, res) {
             firebaseEntryKey: entryKey,
             installmentIndex: installmentIndex.toString(),
             clerkUserId,
-            planType: builderPlan.planType
-          }                     // ← ✅ ADD THIS
+            planType: builderPlan.planType,
+            paymentType: 'builder_installment'
+          }
         }
       });
 
