@@ -16,6 +16,9 @@
       "maxDuration": 30
     }
   },
+   "includeFiles": [
+    "api/lib/**"
+  ],
   "headers": [
     {
       "source": "/api/(.*)",
