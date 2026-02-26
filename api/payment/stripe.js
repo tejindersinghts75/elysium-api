@@ -396,6 +396,11 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Builder plan save failed' });
     }
   }
+
+
+
+
+
   /* =====================================================
    🔥 GENERATE BUILDER INSTALLMENT LINK (Pay Early)
  ======================================================== */
@@ -427,6 +432,7 @@ export default async function handler(req, res) {
 
       // 🔥 PAY EARLY: Generate link ANYTIME for unpaid (no date check!)
 
+
       // Create Stripe Payment Link
       const paymentLink = await stripe.paymentLinks.create({
         line_items: [{
@@ -435,19 +441,22 @@ export default async function handler(req, res) {
             product_data: {
               name: `Founding Builder Installment #${installmentIndex + 1}`,
               description: `Due ${installment.date} - $${installment.amount}`,
-              metadata: { earlyPayment: 'true' } // Optional flag
+              metadata: { earlyPayment: 'true' }
             },
             unit_amount: Math.round(installment.amount * 100)
           },
           quantity: 1
         }],
-        metadata: {
-          clerkUserId,
-          firebaseEntryKey: entryKey,
-          installmentIndex: installmentIndex.toString(),
-          planType: builderPlan.planType
+        payment_intent_data: {  // ← ✅ ADD THIS
+          metadata: {           // ← ✅ ADD THIS
+            firebaseEntryKey: entryKey,
+            installmentIndex: installmentIndex.toString(),
+            clerkUserId,
+            planType: builderPlan.planType
+          }                     // ← ✅ ADD THIS
         }
       });
+
 
       // Update Firebase
       await db.ref(`Mainformdata/${entryKey}/builderPlan/schedule/${installmentIndex}`).update({
