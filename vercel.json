@@ -8,6 +8,12 @@
     },
     "api/applications/submit.js": {
       "maxDuration": 60
+    },
+    "api/cron/daily-builder.js": {
+      "maxDuration": 60
+    },
+    "api/payment/stripe.js": {
+      "maxDuration": 30
     }
   },
   "headers": [
@@ -18,6 +24,12 @@
         { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization" }
       ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/daily-builder",
+      "schedule": "0 0 * * *"
     }
   ]
 }
