@@ -85,10 +85,12 @@ export default async function handler(req, res) {
         const paymentIntent = event.data.object;
         const { firebaseEntryKey, paymentType } = paymentIntent.metadata;
 
-        if (!firebaseEntryKey || !paymentType) {
+        // Only require paymentType for non-builder payments
+        if (!firebaseEntryKey || (!paymentType && !paymentIntent.metadata?.installmentIndex)) {
           console.log('⚠️ Missing metadata, skipping');
           return res.json({ received: true });
         }
+
 
         const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
         const updateData = {
