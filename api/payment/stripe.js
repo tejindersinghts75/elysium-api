@@ -396,6 +396,20 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Invalid or already paid installment' });
       }
 
+      // INSIDE your generate endpoint, BEFORE creating Stripe link:
+      const today = new Date().toISOString().split('T')[0];
+      const dueDate = installment.date;
+      const daysDiff = (new Date(dueDate) - new Date(today)) / (1000 * 60 * 60 * 24);
+
+      if (daysDiff > 0) {
+        return res.json({
+          success: false,
+          reason: 'too_early',
+          daysUntilDue: Math.ceil(daysDiff),
+          message: `Link available ${Math.ceil(daysDiff)} days before due date`
+        });
+      }
+
       // Create Stripe Payment Link
       const paymentLink = await stripe.paymentLinks.create({
         line_items: [{
