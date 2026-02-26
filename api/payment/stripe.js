@@ -162,28 +162,43 @@ export default async function handler(req, res) {
         if (event.type === 'payment_intent.succeeded' && paymentIntent.metadata?.installmentIndex !== undefined) {
           const { firebaseEntryKey, installmentIndex } = paymentIntent.metadata;
 
-          // Update EXACT schedule node
-          await db.ref(`Mainformdata/${firebaseEntryKey}/builderPlan/schedule/${installmentIndex}`).update({
-            status: 'paid',
-            stripePaymentIntentId: paymentIntent.id,
-            stripeChargeId: paymentIntent.latest_charge,
-            amountPaid: paymentIntent.amount / 100,
-            paidAt: Date.now(),
-            paymentStatus: 'success'
-          });
+          console.log(`🔥 BUILDER WEBHOOK TRIGGERED: ${firebaseEntryKey}[${installmentIndex}] $${paymentIntent.amount / 100}`);
 
-          console.log(`✅ BUILDER PAID: ${firebaseEntryKey}[${installmentIndex}] $${paymentIntent.amount / 100}`);
+          try {
+            // Update EXACT schedule node
+            const scheduleRef = db.ref(`Mainformdata/${firebaseEntryKey}/builderPlan/schedule/${installmentIndex}`);
+            console.log('🔄 Updating schedule ref:', scheduleRef.toString());
 
-          // Decrement counter
-          const planRef = db.ref(`Mainformdata/${firebaseEntryKey}/builderPlan`);
-          const planSnap = await planRef.once('value');
-          const planData = planSnap.val();
-          if (planData?.installmentsRemaining > 1) {
-            await planRef.update({
-              installmentsRemaining: planData.installmentsRemaining - 1
+            await scheduleRef.update({
+              status: 'paid',
+              stripePaymentIntentId: paymentIntent.id,
+              stripeChargeId: paymentIntent.latest_charge,
+              amountPaid: paymentIntent.amount / 100,
+              paidAt: Date.now(),
+              paymentStatus: 'success'
             });
+            console.log(`✅ SCHEDULE UPDATED: ${firebaseEntryKey}[${installmentIndex}]`);
+
+            // Decrement counter
+            const planRef = db.ref(`Mainformdata/${firebaseEntryKey}/builderPlan`);
+            const planSnap = await planRef.once('value');
+            const planData = planSnap.val();
+
+            console.log('📊 Plan data:', planData?.installmentsRemaining);
+
+            if (planData?.installmentsRemaining > 1) {
+              await planRef.update({
+                installmentsRemaining: planData.installmentsRemaining - 1
+              });
+              console.log(`✅ COUNTER DECREMENTED: ${planData.installmentsRemaining} → ${planData.installmentsRemaining - 1}`);
+            }
+
+          } catch (updateError) {
+            console.error('❌ BUILDER UPDATE FAILED:', updateError);
+            // Don't let errors crash webhook
           }
         }
+
 
       }
 
