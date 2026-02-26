@@ -1,7 +1,7 @@
 import Stripe from 'stripe';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
-import { generateBuilderLink } from '../../lib/generateBuilderLink.js';  // Fixed path
+import { generateBuilderLink } from '../lib/generateBuilderLink';
 
 // 🔥 INIT (same as others)
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
