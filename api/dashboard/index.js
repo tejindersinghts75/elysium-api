@@ -61,7 +61,7 @@ async function handleUserData(req, res, clerkUserId) {
   let unitReservations = [];
   let earlyAppStatus = { earlyAppStatus: 'No', selectApplication: '0', isFounder: 'No', date: 'January 2027' };
   let hasCompleteData = false;
-
+let latestBuilderPlan = null;
   // 🔥 NEW: Track latest backerPayment
   let latestBackerPayment = null;
 
@@ -78,9 +78,9 @@ async function handleUserData(req, res, clerkUserId) {
       if (data.backerPayment) {
         latestBackerPayment = data.backerPayment;  // Full object!
       }
-       if (data.builderPlan) {
-        builderPlanObject = data.builderPlan;  // Full object!
-      }
+      if (data.builderPlan) {
+  latestBuilderPlan = data.builderPlan;
+}
 
       // Check ANY payment for early access
       if (data.stripePayment?.paymentStatus === "success" ||
@@ -108,7 +108,7 @@ async function handleUserData(req, res, clerkUserId) {
 
       // 🔥 FULL backerPayment object to frontend!
       backerPayment: latestBackerPayment,
-      builderPlan :builderPlanObject,
+      builderPlan: latestBuilderPlan
     }
   });
 }
