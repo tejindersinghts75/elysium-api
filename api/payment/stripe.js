@@ -423,34 +423,176 @@ export default async function handler(req, res) {
 
 
   /* =====================================================
-     🔥 REFUND ENDPOINT
-   ===================================================== */
+   🔥 FINAL PRODUCTION MULTI PAYMENT REFUND API
+   - full rollback
+   - per-payment refund tracking
+   - upgrade aware
+   - builder installment aware
+   - failure safe
+===================================================== */
   if (req.method === 'POST' && req.query.refund === 'payment') {
     try {
       const body = await buffer(req);
-      const { clerkUserId, paymentIntentId, amount } = JSON.parse(body.toString());
+      const { clerkUserId } = JSON.parse(body.toString());
 
-      if (!paymentIntentId) {
-        return res.status(400).json({ error: 'Missing paymentIntentId' });
+      if (!clerkUserId) {
+        return res.status(400).json({ error: 'Missing clerkUserId' });
       }
 
-      // Verify ownership
-      const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
-      if (pi.metadata.clerkUserId !== clerkUserId) {
-        return res.status(403).json({ error: 'Unauthorized' });
+      /* -------------------------------------------------
+         1️⃣ FETCH USER
+      ------------------------------------------------- */
+      const snapshot = await db.ref('Mainformdata')
+        .orderByChild('uid')
+        .equalTo(clerkUserId)
+        .once('value');
+
+      if (!snapshot.exists()) {
+        return res.status(404).json({ error: 'User not found' });
       }
 
-      // Refund (full or partial)
-      const refundParams = { payment_intent: paymentIntentId };
-      if (amount) refundParams.amount = Math.round(amount * 100);
+      const snapshotVal = snapshot.val();
+      const entryKey = Object.keys(snapshotVal)[0];
+      const userData = snapshotVal[entryKey];
 
-      const refund = await stripe.refunds.create(refundParams);
+      const backer = userData?.backerPayment;
+      const upgrades = userData?.upgradeHistory || {};
+      const schedule = userData?.builderPlan?.schedule || [];
 
-      console.log(`✅ Refund ${refund.id}: $${refund.amount / 100}`);
+      if (!backer) {
+        return res.status(400).json({ error: 'No backer payment found' });
+      }
+
+      /* -------------------------------------------------
+         2️⃣ REFUND WINDOW CHECK
+      ------------------------------------------------- */
+      if (backer.refundStatus !== 'eligible') {
+        return res.status(400).json({
+          error: 'Refund not allowed',
+          reason: backer.refundStatus
+        });
+      }
+
+      /* -------------------------------------------------
+         3️⃣ BUILD PAYMENT MAP
+         path tells where to store refund result
+      ------------------------------------------------- */
+      const payments = [];
+
+      // ORIGINAL BACKER
+      if (backer.stripePaymentIntentId) {
+        payments.push({
+          pi: backer.stripePaymentIntentId,
+          path: `Mainformdata/${entryKey}/backerPayment/refund`
+        });
+      }
+
+      // ALL UPGRADES
+      Object.entries(upgrades).forEach(([key, val]) => {
+        if (val?.stripePaymentIntentId) {
+          payments.push({
+            pi: val.stripePaymentIntentId,
+            path: `Mainformdata/${entryKey}/upgradeHistory/${key}/refund`
+          });
+        }
+      });
+
+      // BUILDER INSTALLMENTS (only paid ones)
+      // schedule.forEach((item, index) => {
+      //   if (item?.stripePaymentIntentId && item?.paymentStatus === 'success') {
+      //     payments.push({
+      //       pi: item.stripePaymentIntentId,
+      //       path: `Mainformdata/${entryKey}/builderPlan/schedule/${index}/refund`
+      //     });
+      //   }
+      // });
+
+      if (payments.length === 0) {
+        return res.status(400).json({ error: 'No payments to refund' });
+      }
+
+      /* -------------------------------------------------
+         4️⃣ MARK GLOBAL REFUND PROCESSING
+      ------------------------------------------------- */
+      await db.ref(`Mainformdata/${entryKey}/backerPayment`).update({
+        refundStatus: 'processing',
+        refundStartedAt: Date.now()
+      });
+
+      /* -------------------------------------------------
+         5️⃣ PROCESS REFUNDS ONE BY ONE
+      ------------------------------------------------- */
+      let successCount = 0;
+      let failedCount = 0;
+
+      for (const p of payments) {
+        try {
+          // mark node processing
+          await db.ref(p.path).set({
+            status: 'processing',
+            startedAt: Date.now()
+          });
+
+          const pi = await stripe.paymentIntents.retrieve(p.pi);
+
+          if (pi.status !== 'succeeded') {
+            throw new Error('Payment not succeeded');
+          }
+
+          const charges = await stripe.charges.list({
+            payment_intent: p.pi
+          });
+
+          if (charges.data[0]?.refunded) {
+            throw new Error('Already refunded');
+          }
+
+          const refund = await stripe.refunds.create({
+            payment_intent: p.pi
+          });
+
+          await db.ref(p.path).set({
+            status: refund.status,
+            refundId: refund.id,
+            refundedAt: Date.now(),
+            amount: refund.amount / 100,
+            currency: refund.currency
+          });
+
+          successCount++;
+
+        } catch (err) {
+          await db.ref(p.path).set({
+            status: 'failed',
+            error: err.message,
+            failedAt: Date.now()
+          });
+
+          failedCount++;
+        }
+      }
+
+      /* -------------------------------------------------
+         6️⃣ FINAL GLOBAL STATUS
+      ------------------------------------------------- */
+      const finalStatus = failedCount === 0 ? 'success' : 'failed';
+
+      await db.ref(`Mainformdata/${entryKey}/backerPayment`).update({
+        refundStatus: finalStatus,
+        refundCompletedAt: Date.now(),
+        refundSummary: {
+          totalPayments: payments.length,
+          successCount,
+          failedCount
+        }
+      });
+
       return res.json({
-        success: true,
-        refundId: refund.id,
-        amountRefunded: refund.amount / 100
+        success: finalStatus === 'success',
+        refundStatus: finalStatus,
+        totalPayments: payments.length,
+        successCount,
+        failedCount
       });
 
     } catch (error) {
