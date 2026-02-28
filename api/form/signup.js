@@ -137,7 +137,7 @@ export default async function handler(req, res) {
             profession: profession || '',
             income: income || '',
             household: household || '',
-            why: why?.trim() || '',
+            why: why || '',
             referredBy: referredBy || '',
             updatedAt: Date.now(),
             isFounder: false,
@@ -282,7 +282,7 @@ export default async function handler(req, res) {
           profession: profession || '',
           income: income || 'Not selected',
           household: household || 'Not selected',
-          why: why?.trim() || '',
+          why: why || '',
           createdAt: Date.now()
         }
       });
@@ -307,7 +307,7 @@ export default async function handler(req, res) {
         profession: profession || '',
         income: income || '',
         household: household || '',
-        why: why?.trim() || '',
+        why: why || '',
         referredBy: referredBy || '',
         createdAt: Date.now(),
         isFounder: false,
@@ -362,7 +362,7 @@ export default async function handler(req, res) {
         profession: profession || '',
         income: income || 'Not selected',
         household: household || 'Not selected',
-        why: why?.trim() || '',
+        why: why || '',
         referredBy: referredBy || '',
         referralId: referralId || '',
         clerkUserId: userId,
