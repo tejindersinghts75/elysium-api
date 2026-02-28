@@ -210,6 +210,63 @@ export default async function handler(req, res) {
 
 
       }
+      /* ===============================================
+   REFUND EVENTS
+=============================================== */
+      if (event.type === 'refund.updated' || event.type === 'charge.refunded') {
+        const eventId = event.id;
+
+        const alreadyProcessed =
+          (await db.ref(`stripeWebhookEvents/${eventId}`).once('value')).exists();
+
+        if (alreadyProcessed) {
+          console.log('⚠️ Duplicate webhook ignored:', eventId);
+          return res.json({ received: true });
+        }
+
+        await db.ref(`stripeWebhookEvents/${eventId}`).set({
+          type: event.type,
+          processedAt: Date.now()
+        });
+        let refund;
+
+        if (event.type === 'refund.updated') {
+          refund = event.data.object;
+        }
+
+        if (event.type === 'charge.refunded') {
+          const charge = event.data.object;
+          refund = charge.refunds.data[charge.refunds.data.length - 1];
+        }
+
+        if (!refund) {
+          console.log('⚠️ No refund object found');
+          return res.json({ received: true });
+        }
+
+        console.log("💸 Refund webhook:", refund.id, refund.status);
+
+        try {
+
+          const index =
+            (await db.ref(`refundIndex/${refund.id}`).once('value')).val();
+
+          if (index?.path) {
+            await db.ref(index.path).update({
+              status: refund.status,
+              updatedAt: Date.now(),
+              lastWebhookEvent: event.type
+            });
+
+            console.log("✅ Refund synced:", refund.id);
+          } else {
+            console.log("⚠️ Refund not found:", refund.id);
+          }
+
+        } catch (err) {
+          console.error("❌ Refund webhook error:", err);
+        }
+      }
 
       return res.json({ received: true });
     } catch (error) {
@@ -530,7 +587,9 @@ export default async function handler(req, res) {
           // mark node processing
           await db.ref(p.path).set({
             status: 'processing',
-            startedAt: Date.now()
+            startedAt: Date.now(),
+
+
           });
 
           const pi = await stripe.paymentIntents.retrieve(p.pi);
@@ -543,13 +602,14 @@ export default async function handler(req, res) {
             payment_intent: p.pi
           });
 
-          if (charges.data[0]?.refunded) {
+          if (charges.data[0]?.amount_refunded > 0) {
             throw new Error('Already refunded');
           }
 
-          const refund = await stripe.refunds.create({
-            payment_intent: p.pi
-          });
+          const refund = await stripe.refunds.create(
+            { payment_intent: p.pi },
+            { idempotencyKey: `refund_${p.pi}` }
+          );
 
           await db.ref(p.path).set({
             status: refund.status,
@@ -558,7 +618,9 @@ export default async function handler(req, res) {
             amount: refund.amount / 100,
             currency: refund.currency
           });
-
+          await db.ref(`refundIndex/${refund.id}`).set({
+            path: p.path
+          });
           successCount++;
 
         } catch (err) {
