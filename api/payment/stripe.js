@@ -91,18 +91,27 @@ export default async function handler(req, res) {
         }
 
         const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
+        // const updateData = {
+        //   paymentStatus: event.type === 'payment_intent.succeeded' ? 'success' : 'failed',
+        //   stripeChargeId: paymentIntent.latest_charge,
+        //   stripePaymentIntentId: paymentIntent.id,
+        //   amount: paymentIntent.amount / 100,
+        //   processedAt: Date.now(),
+        //   lastWebhookEvent: event.type,
+        //   paymentType
+        // };
+
+        const isUpgrade = paymentIntent.metadata?.upgrade === "true";
+
         const updateData = {
           paymentStatus: event.type === 'payment_intent.succeeded' ? 'success' : 'failed',
           stripeChargeId: paymentIntent.latest_charge,
-          stripePaymentIntentId: paymentIntent.id,
+          ...(!isUpgrade && { stripePaymentIntentId: paymentIntent.id }),
           amount: paymentIntent.amount / 100,
           processedAt: Date.now(),
           lastWebhookEvent: event.type,
           paymentType
-
-
         };
-
 
         if (event.type === 'payment_intent.payment_failed') {
           updateData.error = paymentIntent.last_payment_error?.message || 'Payment failed';
