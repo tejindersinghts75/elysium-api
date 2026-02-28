@@ -413,6 +413,42 @@ export default async function handler(req, res) {
   }
 
 
+  /* =====================================================
+     🔥 REFUND ENDPOINT
+   ===================================================== */
+  if (req.method === 'POST' && req.query.refund === 'payment') {
+    try {
+      const body = await buffer(req);
+      const { clerkUserId, paymentIntentId, amount } = JSON.parse(body.toString());
+
+      if (!paymentIntentId) {
+        return res.status(400).json({ error: 'Missing paymentIntentId' });
+      }
+
+      // Verify ownership
+      const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+      if (pi.metadata.clerkUserId !== clerkUserId) {
+        return res.status(403).json({ error: 'Unauthorized' });
+      }
+
+      // Refund (full or partial)
+      const refundParams = { payment_intent: paymentIntentId };
+      if (amount) refundParams.amount = Math.round(amount * 100);
+
+      const refund = await stripe.refunds.create(refundParams);
+
+      console.log(`✅ Refund ${refund.id}: $${refund.amount / 100}`);
+      return res.json({
+        success: true,
+        refundId: refund.id,
+        amountRefunded: refund.amount / 100
+      });
+
+    } catch (error) {
+      console.error('❌ Refund error:', error.message);
+      return res.status(500).json({ error: error.message });
+    }
+  }
 
 
 
