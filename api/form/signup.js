@@ -43,7 +43,7 @@ export default async function handler(req, res) {
       body[key] = fields[key][0] || fields[key];
     }
 
-    let{
+    let {
       name, email, mobile, selectedCity, profession, income, household, why,
       captchaToken, referredBy, referralId
     } = body;
@@ -64,17 +64,43 @@ export default async function handler(req, res) {
     }
     await db.ref(rateKey).transaction(current => (current || 0) + 1);
 
-    // 2. CAPTCHA
-    if (captchaToken) {
-      const captchaRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `secret=${process.env.TURNSTILE_SECRET_KEY}&response=${captchaToken}&remoteip=${ip}`
+
+    // 2. CAPTCHA (MANDATORY + TIMEOUT SAFE)
+
+    // 🔴 Step 1 — Require captcha token
+    if (!captchaToken) {
+      return res.status(400).json({ error: 'Captcha required. Please verify you are human.' });
+    }
+
+    // 🔴 Step 2 — Add timeout protection (8 seconds)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    let captchaData;
+
+    try {
+      const captchaRes = await fetch(
+        'https://challenges.cloudflare.com/turnstile/v0/siteverify',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `secret=${process.env.TURNSTILE_SECRET_KEY}&response=${captchaToken}&remoteip=${ip}`,
+          signal: controller.signal
+        }
+      );
+
+      clearTimeout(timeout);
+      captchaData = await captchaRes.json();
+
+    } catch (err) {
+      return res.status(400).json({
+        error: 'Captcha verification failed or timed out. Please try again.'
       });
-      const captchaData = await captchaRes.json();
-      if (!captchaData.success) {
-        return res.status(400).json({ error: 'Invalid CAPTCHA' });
-      }
+    }
+
+    // 🔴 Step 3 — Check verification result
+    if (!captchaData.success) {
+      return res.status(400).json({ error: 'Invalid CAPTCHA. Please retry.' });
     }
 
     // 3. BASIC VALIDATION
