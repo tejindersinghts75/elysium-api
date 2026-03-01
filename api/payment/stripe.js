@@ -211,8 +211,8 @@ export default async function handler(req, res) {
 
       }
       /* ===============================================
-   REFUND EVENTS
-=============================================== */
+          REFUND EVENTS
+        =============================================== */
       if (event.type === 'refund.updated' || event.type === 'charge.refunded') {
         const eventId = event.id;
 
@@ -534,22 +534,41 @@ export default async function handler(req, res) {
          3️⃣ BUILD PAYMENT MAP
          path tells where to store refund result
       ------------------------------------------------- */
+      /* 3️⃣ BUILD PAYMENT LIST TO REFUND */
       const payments = [];
 
-      // ORIGINAL BACKER
-      if (backer.stripePaymentIntentId) {
+      /* 1️⃣ ORIGINAL DEPOSIT ($99) */
+      if (userData?.stripePayment?.stripePaymentIntentId) {
+        payments.push({
+          pi: userData.stripePayment.stripePaymentIntentId,
+          path: `Mainformdata/${entryKey}/stripePayment/refund`
+        });
+      }
+
+      /* 2️⃣ BACKER PAYMENT */
+      if (backer?.stripePaymentIntentId) {
         payments.push({
           pi: backer.stripePaymentIntentId,
           path: `Mainformdata/${entryKey}/backerPayment/refund`
         });
       }
 
-      // ALL UPGRADES
+      /* 3️⃣ ALL UPGRADES */
       Object.entries(upgrades).forEach(([key, val]) => {
         if (val?.stripePaymentIntentId) {
           payments.push({
             pi: val.stripePaymentIntentId,
             path: `Mainformdata/${entryKey}/upgradeHistory/${key}/refund`
+          });
+        }
+      });
+
+      /* 4️⃣ BUILDER INSTALLMENTS (PAID ONLY) */
+      schedule.forEach((item, index) => {
+        if (item?.stripePaymentIntentId && item?.paymentStatus === 'success') {
+          payments.push({
+            pi: item.stripePaymentIntentId,
+            path: `Mainformdata/${entryKey}/builderPlan/schedule/${index}/refund`
           });
         }
       });
