@@ -664,6 +664,12 @@ export default async function handler(req, res) {
         }
       });
 
+      if (finalStatus === 'success') {
+        await db.ref(`Mainformdata/${entryKey}`).update({
+          allRefund: true,
+          allRefundAt: Date.now()
+        });
+      }
       return res.json({
         success: finalStatus === 'success',
         refundStatus: finalStatus,
