@@ -24,7 +24,7 @@ const PLAN_PRICES = {
   "2bhk": 2500,
   "4bhk": 3000
 };
-
+const REFUND_WINDOW_MS = 60 * 1000;
 export const config = {
   api: { bodyParser: false }
 };
@@ -356,8 +356,8 @@ export default async function handler(req, res) {
 
       // 🔥 AUTO-EXPIRE LOGIC
       if (backerData.refundStatus === 'eligible' && windowStart) {
-        //  const windowEnd = windowStart + (30 * 1000); // 30 SECONDS
-        const windowEnd = windowStart + (90 * 24 * 60 * 60 * 1000);
+
+        const windowEnd = backer.refundWindowStart + REFUND_WINDOW_MS;
         const now = Date.now();
 
         if (now >= windowEnd) {
@@ -820,7 +820,8 @@ export default async function handler(req, res) {
           return res.status(400).json({ error: 'Upgrade window not available' });
         }
 
-        const windowEnd = backer.refundWindowStart + (90 * 24 * 60 * 60 * 1000);
+
+        const windowEnd = windowStart + REFUND_WINDOW_MS;
 
         if (Date.now() > windowEnd) {
           return res.status(400).json({ error: 'Upgrade window expired (90 days passed)' });
