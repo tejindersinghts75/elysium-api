@@ -13,7 +13,8 @@ if (!getApps().length) {
 
 const db = getDatabase();
 
-const REFUND_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
+//const REFUND_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
+const REFUND_WINDOW_MS = 60 * 1000;
 
 export default async function handler(req, res) {
 
