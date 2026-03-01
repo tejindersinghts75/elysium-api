@@ -814,6 +814,17 @@ export default async function handler(req, res) {
 
       /* UPGRADE */
       if (paymentType === 'backer' && targetPlan) {
+        const backer = userData?.backerPayment;
+
+        if (!backer?.refundWindowStart) {
+          return res.status(400).json({ error: 'Upgrade window not available' });
+        }
+
+        const windowEnd = backer.refundWindowStart + (90 * 24 * 60 * 60 * 1000);
+
+        if (Date.now() > windowEnd) {
+          return res.status(400).json({ error: 'Upgrade window expired (90 days passed)' });
+        }
         const currentPaid = parseFloat(userData?.backerPayment?.amount || 0);
         const newPlanPrice = PLAN_PRICES[targetPlan];
 
