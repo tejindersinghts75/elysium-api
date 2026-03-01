@@ -61,9 +61,10 @@ async function handleUserData(req, res, clerkUserId) {
   let unitReservations = [];
   let earlyAppStatus = { earlyAppStatus: 'No', selectApplication: '0', isFounder: 'No', date: 'January 2027' };
   let hasCompleteData = false;
-let latestBuilderPlan = null;
-  // 🔥 NEW: Track latest backerPayment
+  let latestBuilderPlan = null;
   let latestBackerPayment = null;
+  let allRefund = false;
+  let allRefundAt = null;
 
   if (mainformSnapshot.exists()) {
     mainformSnapshot.forEach((childSnapshot) => {
@@ -79,12 +80,15 @@ let latestBuilderPlan = null;
         latestBackerPayment = data.backerPayment;  // Full object!
       }
       if (data.builderPlan) {
-  latestBuilderPlan = data.builderPlan;
-}
-
+        latestBuilderPlan = data.builderPlan;
+      }
+      if (data.allRefund === true) {
+        allRefund = true;
+        allRefundAt = data.allRefundAt || null;
+      }
       // Check ANY payment for early access
       if (data.stripePayment?.paymentStatus === "success" ||
-          data.backerPayment?.paymentStatus === "success") {
+        data.backerPayment?.paymentStatus === "success") {
         earlyAppStatus = {
           earlyAppStatus: 'Yes',
           selectApplication: '99',
@@ -105,10 +109,11 @@ let latestBuilderPlan = null;
       earlyAppStatus,
       hasMainformData: mainformSnapshot.exists(),
       hasCompleteData,
-
-      // 🔥 FULL backerPayment object to frontend!
       backerPayment: latestBackerPayment,
-      builderPlan: latestBuilderPlan
+      builderPlan: latestBuilderPlan,
+      allRefund,
+      allRefundAt
+
     }
   });
 }
