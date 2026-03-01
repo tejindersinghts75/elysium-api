@@ -90,83 +90,79 @@ export default async function handler(req, res) {
           return res.json({ received: true });
         }
 
-        const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
-        // const updateData = {
-        //   paymentStatus: event.type === 'payment_intent.succeeded' ? 'success' : 'failed',
-        //   stripeChargeId: paymentIntent.latest_charge,
-        //   stripePaymentIntentId: paymentIntent.id,
-        //   amount: paymentIntent.amount / 100,
-        //   processedAt: Date.now(),
-        //   lastWebhookEvent: event.type,
-        //   paymentType
-        // };
+        if (paymentType !== 'builder_installment') {
 
-        const isUpgrade = paymentIntent.metadata?.upgrade === "true";
+          const paymentPath =
+            paymentType === 'backer'
+              ? 'backerPayment'
+              : 'stripePayment';
 
-        const updateData = {
-          paymentStatus: event.type === 'payment_intent.succeeded' ? 'success' : 'failed',
-          stripeChargeId: paymentIntent.latest_charge,
-          ...(!isUpgrade && { stripePaymentIntentId: paymentIntent.id }),
-          amount: paymentIntent.amount / 100,
-          processedAt: Date.now(),
-          lastWebhookEvent: event.type,
-          paymentType
-        };
+          const isUpgrade = paymentIntent.metadata?.upgrade === "true";
 
-        if (event.type === 'payment_intent.payment_failed') {
-          updateData.error = paymentIntent.last_payment_error?.message || 'Payment failed';
-        }
+          const updateData = {
+            paymentStatus: event.type === 'payment_intent.succeeded' ? 'success' : 'failed',
+            stripeChargeId: paymentIntent.latest_charge,
+            ...(!isUpgrade && { stripePaymentIntentId: paymentIntent.id }),
+            amount: paymentIntent.amount / 100,
+            processedAt: Date.now(),
+            lastWebhookEvent: event.type,
+            paymentType
+          };
 
-        await db.ref(`Mainformdata/${firebaseEntryKey}/${paymentPath}`).update(updateData);
-        console.log(`✅ Webhook ${paymentType}: ${firebaseEntryKey}`);
+          if (event.type === 'payment_intent.payment_failed') {
+            updateData.error = paymentIntent.last_payment_error?.message || 'Payment failed';
+          }
 
-        // 🔥 CORRECT - FIRST TIME ONLY
-        if (paymentType === 'backer' && event.type === 'payment_intent.succeeded') {
-          const backerRef = db.ref(`Mainformdata/${firebaseEntryKey}/backerPayment`);
-          const snap = await backerRef.once('value');
-          if (!snap.val()?.refundWindowStart) {  // ← CHECK EXISTS
-            await backerRef.update({
-              refundWindowStart: Date.now(),
-              refundStatus: 'eligible'
+          await db.ref(`Mainformdata/${firebaseEntryKey}/${paymentPath}`).update(updateData);
+          console.log(`✅ Webhook ${paymentType}: ${firebaseEntryKey}`);
+
+          // 🔥 CORRECT - FIRST TIME ONLY
+          if (paymentType === 'backer' && event.type === 'payment_intent.succeeded') {
+            const backerRef = db.ref(`Mainformdata/${firebaseEntryKey}/backerPayment`);
+            const snap = await backerRef.once('value');
+            if (!snap.val()?.refundWindowStart) {  // ← CHECK EXISTS
+              await backerRef.update({
+                refundWindowStart: Date.now(),
+                refundStatus: 'eligible'
+              });
+            }
+          }
+
+          /* 🔥 PLAN UPGRADE HANDLER */
+          if (event.type === 'payment_intent.succeeded' && paymentIntent.metadata?.upgrade === "true") {
+            const targetPlan = paymentIntent.metadata.targetPlan;
+            const newPlanPrice = parseFloat(paymentIntent.metadata.newPlanPrice);
+
+            const userRef = db.ref(`Mainformdata/${firebaseEntryKey}`);
+            const snap = await userRef.once('value');
+            const userData = snap.val();
+            const oldPlanPrice = parseFloat(userData?.PaymentFormData?.priceperfoot || 0);
+
+            // Update current plan
+            await userRef.child('PaymentFormData').update({
+              priceperfoot: newPlanPrice,
+              selectedPlan: targetPlan
             });
+
+            // Set full backer amount
+            await userRef.child('backerPayment').update({
+              amount: newPlanPrice,
+              lastWebhookEvent: "upgrade_success"
+            });
+
+            // Upgrade history
+            await userRef.child(`upgradeHistory/${Date.now()}`).set({
+              fromPlanPrice: oldPlanPrice,
+              toPlan: targetPlan,
+              newPlanPrice,
+              upgradePaid: paymentIntent.amount / 100,
+              upgradedAt: Date.now(),
+              stripePaymentIntentId: paymentIntent.id
+            });
+
+            console.log(`✅ UPGRADE → ${targetPlan} ($${newPlanPrice})`);
           }
         }
-
-        /* 🔥 PLAN UPGRADE HANDLER */
-        if (event.type === 'payment_intent.succeeded' && paymentIntent.metadata?.upgrade === "true") {
-          const targetPlan = paymentIntent.metadata.targetPlan;
-          const newPlanPrice = parseFloat(paymentIntent.metadata.newPlanPrice);
-
-          const userRef = db.ref(`Mainformdata/${firebaseEntryKey}`);
-          const snap = await userRef.once('value');
-          const userData = snap.val();
-          const oldPlanPrice = parseFloat(userData?.PaymentFormData?.priceperfoot || 0);
-
-          // Update current plan
-          await userRef.child('PaymentFormData').update({
-            priceperfoot: newPlanPrice,
-            selectedPlan: targetPlan
-          });
-
-          // Set full backer amount
-          await userRef.child('backerPayment').update({
-            amount: newPlanPrice,
-            lastWebhookEvent: "upgrade_success"
-          });
-
-          // Upgrade history
-          await userRef.child(`upgradeHistory/${Date.now()}`).set({
-            fromPlanPrice: oldPlanPrice,
-            toPlan: targetPlan,
-            newPlanPrice,
-            upgradePaid: paymentIntent.amount / 100,
-            upgradedAt: Date.now(),
-            stripePaymentIntentId: paymentIntent.id
-          });
-
-          console.log(`✅ UPGRADE → ${targetPlan} ($${newPlanPrice})`);
-        }
-
         /* 🔥 BUILDER INSTALLMENT WEBHOOK */
         if (event.type === 'payment_intent.succeeded' && paymentIntent.metadata?.installmentIndex !== undefined) {
           const { firebaseEntryKey, installmentIndex } = paymentIntent.metadata;
@@ -430,7 +426,7 @@ export default async function handler(req, res) {
   }
 
   /* =====================================================
-     🔥 BUILDER PLAN SAVE ← PASTE HERE
+     🔥 BUILDER PLAN | FOUNDING BUILDER
   ===================================================== */
   if (req.method === 'POST' && req.query.save === 'builder-plan') {
     try {
