@@ -24,7 +24,8 @@ const PLAN_PRICES = {
   "2bhk": 2500,
   "4bhk": 3000
 };
-const REFUND_WINDOW_MS = 60 * 1000;
+
+const REFUND_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 export const config = {
   api: { bodyParser: false }
 };
@@ -357,7 +358,7 @@ export default async function handler(req, res) {
       // 🔥 AUTO-EXPIRE LOGIC
       if (backerData.refundStatus === 'eligible' && windowStart) {
 
-        const windowEnd = backer.refundWindowStart + REFUND_WINDOW_MS;
+        const windowEnd = backerData.refundWindowStart + REFUND_WINDOW_MS;
         const now = Date.now();
 
         if (now >= windowEnd) {
@@ -519,11 +520,20 @@ export default async function handler(req, res) {
       /* -------------------------------------------------
          2️⃣ REFUND WINDOW CHECK
       ------------------------------------------------- */
+
+
+      if (!backer?.refundWindowStart) {
+        return res.status(400).json({ error: 'Upgrade window not available' });
+      }
+
       if (backer.refundStatus !== 'eligible') {
-        return res.status(400).json({
-          error: 'Refund not allowed',
-          reason: backer.refundStatus
-        });
+        return res.status(400).json({ error: 'Upgrade not allowed' });
+      }
+
+      const windowEnd = backer.refundWindowStart + REFUND_WINDOW_MS;
+
+      if (Date.now() > windowEnd) {
+        return res.status(400).json({ error: 'Upgrade window expired (90 days passed)' });
       }
 
       /* -------------------------------------------------
@@ -820,13 +830,17 @@ export default async function handler(req, res) {
           return res.status(400).json({ error: 'Upgrade window not available' });
         }
 
+        if (backer.refundStatus !== 'eligible') {
+          return res.status(400).json({ error: 'Upgrade not allowed' });
+        }
 
-        const windowEnd = windowStart + REFUND_WINDOW_MS;
+        const windowEnd = backer.refundWindowStart + REFUND_WINDOW_MS;
 
         if (Date.now() > windowEnd) {
           return res.status(400).json({ error: 'Upgrade window expired (90 days passed)' });
         }
-        const currentPaid = parseFloat(userData?.backerPayment?.amount || 0);
+
+        const currentPaid = parseFloat(backer?.amount || 0);
         const newPlanPrice = PLAN_PRICES[targetPlan];
 
         if (!newPlanPrice) {
@@ -834,12 +848,12 @@ export default async function handler(req, res) {
         }
 
         const upgradeAmount = newPlanPrice - currentPaid;
+
         if (upgradeAmount <= 0) {
           return res.status(400).json({ error: 'Nothing to upgrade' });
         }
 
         totalAmount = upgradeAmount;
-        console.log(`🔼 Upgrade charge: $${upgradeAmount.toFixed(2)}`);
       }
       /* FIRST FULL BACKER */
       else if (paymentType === 'backer') {
