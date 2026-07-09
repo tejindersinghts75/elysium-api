@@ -2,6 +2,7 @@ import formidable from 'formidable';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 import { createClerkClient } from '@clerk/backend';
+import { BrevoClient } from "@getbrevo/brevo";
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
@@ -45,7 +46,8 @@ export default async function handler(req, res) {
 
     let {
       name, email, mobile, selectedCity, profession, income, household, why,
-      captchaToken, referredBy, referralId
+      captchaToken, referredBy, referralId,
+      utm_source, utm_medium, utm_campaign, utm_content, utm_term, landing_page
     } = body;
     // ✅ NORMALIZE MOBILE ONCE (VERY IMPORTANT)
     if (Array.isArray(mobile)) mobile = mobile[0];
@@ -98,7 +100,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // 🔴 Step 3 — Check verification result
+    //🔴 Step 3 — Check verification result
     if (!captchaData.success) {
       return res.status(400).json({ error: 'Invalid CAPTCHA. Please retry.' });
     }
@@ -144,14 +146,52 @@ export default async function handler(req, res) {
         // Check Mainformdata
         const mainformCheck = await db.ref('Mainformdata').orderByChild('uid').equalTo(existingClerkUserId).once('value');
         if (mainformCheck.exists()) {
+
+          // let targetEntryKey = null;
+          // mainformCheck.forEach((snapshot) => {
+          //   targetEntryKey = snapshot.key;
+          // });
+          // console.log('🎉 Stage 3 - UPDATE MODE! Entry:', targetEntryKey);
+
+          let isFullyRegistered = false;
           let targetEntryKey = null;
+          let existingData = null;
+
           mainformCheck.forEach((snapshot) => {
-            targetEntryKey = snapshot.key;
+            if (isFullyRegistered) return;
+
+            const data = snapshot.val();
+
+            const hasEmail = !!data?.email;
+            const step1Done = data?.resume?.step1Completed === true;
+
+            if (hasEmail && step1Done) {
+              isFullyRegistered = true;
+              return;
+            }
+
+            if (!targetEntryKey) {
+              targetEntryKey = snapshot.key;
+              existingData = data;
+            }
           });
-          console.log('🎉 Stage 3 - UPDATE MODE! Entry:', targetEntryKey);
 
+          // 🔥 IMPORTANT: BLOCK full users
+          if (isFullyRegistered) {
+            return res.status(400).json({
+              error: 'User already registered with this email'
+            });
+          }
 
+          // 🔥 safety check
+          if (!targetEntryKey) {
+            return res.status(500).json({
+              error: 'Something went wrong. Please try again.'
+            });
+          }
 
+          // ✅ UPDATE MODE (Case 3)
+          console.log('🎉 UPDATE MODE! Entry:', targetEntryKey);
 
 
           // 🔥 IMMEDIATELY UPDATE EXISTING ENTRY
@@ -165,8 +205,27 @@ export default async function handler(req, res) {
             household: household || '',
             why: why || '',
             referredBy: referredBy || '',
+            utm: {
+              source: utm_source || '',
+              medium: utm_medium || '',
+              campaign: utm_campaign || '',
+              content: utm_content || '',
+              term: utm_term || '',
+              landingPage: landing_page || ''
+            },
             updatedAt: Date.now(),
             isFounder: false,
+            resume: {
+              step1Completed: true,
+              step2Completed: false,
+              earlyApplicationPaid: false,
+              webinarWatched: false,
+              foundingBackerPaid: false,
+              currentStep: 2,
+              lastCompletedStep: 1
+            }
+            //  'resume/step1Completed': true
+
           });
 
 
@@ -239,15 +298,6 @@ export default async function handler(req, res) {
           }
           console.log('🔗=== FIXED END ===');
 
-
-
-
-
-
-
-
-
-
           // Update users/ collection too
           const cleanName = name.trim().replace(/[^a-zA-Z\s]/g, '');
           const firstName = cleanName.split(' ')[0] || 'User';
@@ -268,7 +318,7 @@ export default async function handler(req, res) {
             email: emailLower,
             firstName,
             message: 'Welcome back! Form updated successfully!',
-            redirect: '/paymentpagetest'
+            redirect: '/living-spaces'
           });
         }
       }
@@ -335,8 +385,26 @@ export default async function handler(req, res) {
         household: household || '',
         why: why || '',
         referredBy: referredBy || '',
+        utm: {
+          source: utm_source || '',
+          medium: utm_medium || '',
+          campaign: utm_campaign || '',
+          content: utm_content || '',
+          term: utm_term || '',
+          landingPage: landing_page || ''
+        },
         createdAt: Date.now(),
         isFounder: false,
+        resume: {
+          step1Completed: true,
+          step2Completed: false,
+          earlyApplicationPaid: false,
+          webinarWatched: false,
+          foundingBackerPaid: false,
+          currentStep: 2,
+          lastCompletedStep: 1
+        }
+
       }),
       db.ref(`users/${userId}`).set({
         firstname: firstName,
@@ -346,6 +414,53 @@ export default async function handler(req, res) {
         createdAt: Date.now()
       })
     ]);
+
+
+
+    try {
+      const client = new BrevoClient({
+        apiKey: process.env.BREVO_API_KEY,
+      });
+
+      const emailLower = email.toLowerCase();
+
+      // 1. Create / Update contact
+      await fetch("https://api.brevo.com/v3/contacts", {
+        method: "POST",
+        headers: {
+          "api-key": process.env.BREVO_API_KEY,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          email: emailLower,
+          attributes: {
+            FIRSTNAME: firstName,
+            PREFERRED_CITY: selectedCity || "",
+            WAITLIST_JOINED_AT: new Date().toISOString().split("T")[0],
+
+            CUSTOMIZATION_COMPLETED: false,
+            EARLY_APPLICATION: false,
+            WEBINAR_WATCHED: false,
+            FOUNDING_BACKER: false
+          },
+          updateEnabled: true
+        })
+      });
+
+      // 2. Send event
+      await client.event.createEvent({
+        event_name: "waitlist_joined",
+        identifiers: {
+          email_id: emailLower
+        }
+      });
+
+      console.log("✅ Brevo event sent");
+
+    } catch (brevoError) {
+      console.error("❌ Brevo error:", brevoError.message);
+    }
+
 
     // 🔥 REFERRAL CHAIN UPDATE
     if (referredBy && referralId) {
@@ -410,7 +525,7 @@ export default async function handler(req, res) {
         email: emailLower,
         tempPassword: randomPassword,
         firstName,
-        redirect: '/paymentpagetest'
+        redirect: '/living-spaces'
       });
     } else {
       res.json({
@@ -444,4 +559,3 @@ export default async function handler(req, res) {
     res.status(500).json({ error: 'Internal server error' });
   }
 }
-//last

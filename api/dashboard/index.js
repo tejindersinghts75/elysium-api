@@ -63,6 +63,7 @@ async function handleUserData(req, res, clerkUserId) {
   let hasCompleteData = false;
   let latestBuilderPlan = null;
   let latestBackerPayment = null;
+  let latestResume = null;
   let allRefund = false;
   let allRefundAt = null;
 
@@ -71,7 +72,9 @@ async function handleUserData(req, res, clerkUserId) {
       const data = childSnapshot.val();
       hasCompleteData = data.name && data.email;
 
-      if (data.PaymentFormData?.unit) {
+      if (Array.isArray(data.PaymentFormData?.priceperfoot)) {
+        unitReservations = data.PaymentFormData.priceperfoot;
+      } else if (data.PaymentFormData?.unit) {
         unitReservations = data.PaymentFormData.unit;
       }
 
@@ -81,6 +84,9 @@ async function handleUserData(req, res, clerkUserId) {
       }
       if (data.builderPlan) {
         latestBuilderPlan = data.builderPlan;
+      }
+      if (data.resume) {
+        latestResume = data.resume;
       }
       if (data.allRefund === true) {
         allRefund = true;
@@ -111,6 +117,7 @@ async function handleUserData(req, res, clerkUserId) {
       hasCompleteData,
       backerPayment: latestBackerPayment,
       builderPlan: latestBuilderPlan,
+      resume: latestResume,
       allRefund,
       allRefundAt
 

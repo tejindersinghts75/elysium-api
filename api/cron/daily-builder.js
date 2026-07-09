@@ -2,7 +2,16 @@ import Stripe from 'stripe';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
+// const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
+const isLive = process.env.STRIPE_MODE === 'live';
+
+const stripe = new Stripe(
+  isLive
+    ? process.env.STRIPE_SECRET_KEY_LIVE
+    : process.env.STRIPE_SECRET_KEY_TEST,
+  { apiVersion: '2024-06-20' }
+);
+
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
   credential: cert(serviceAccount),

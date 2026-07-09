@@ -60,7 +60,7 @@ export default async function handler(req, res) {
       await timerRef.update({ endTime, timerExpired: false });
     }
 
-    res.json({ endTime, timerExpired });
+    res.json({ endTime, timerExpired, paymentFormData: timerData?.PaymentFormData || null });
   } catch (error) {
     console.error('Timer status error:', error);
     res.status(500).json({ endTime: 0, timerExpired: true });

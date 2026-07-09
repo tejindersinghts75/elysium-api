@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Founding Backers Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gradient-to-br from-gray-100 to-gray-200 min-h-screen p-10">
+  <div class="max-w-7xl mx-auto">
+    <div class="flex justify-between items-center mb-10">
+      <h1 class="text-4xl font-bold text-gray-800">Founding Backers</h1>
+
+      <button onclick="loadUsers()"
+        class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl shadow-lg transition">
+        Refresh
+      </button>
+    </div>
+
+    <div id="users" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"></div>
+  </div>
+
+  <script>
+    const API_URL = `${window.API_BASE || ''}/api/foundbacker`;
+
+    async function loadUsers() {
+      try {
+        const res = await fetch(API_URL);
+        const users = await res.json();
+        renderUsers(users);
+      } catch (err) {
+        alert('Failed to load users');
+        console.error(err);
+      }
+    }
+
+    function renderUsers(users) {
+      const container = document.getElementById('users');
+      container.innerHTML = '';
+
+      users.forEach(user => {
+        const isFounder = user.isFounder === true;
+        const clerkUserId = user.uid || user.clerkUserId || '';
+        const earlyPaid = user.earlyApplicationPaid === true || user.earlyApplicationPaymentStatus === 'success';
+        const card = document.createElement('div');
+
+        card.className = `
+          relative bg-white/80 backdrop-blur-lg
+          border border-gray-200 rounded-2xl p-7
+          shadow-lg hover:shadow-2xl
+          transition-all duration-300 hover:-translate-y-1
+          overflow-hidden
+        `;
+
+        card.innerHTML = `
+          <div class="absolute top-0 left-0 w-full h-1
+            ${isFounder
+              ? 'bg-gradient-to-r from-green-400 to-emerald-600'
+              : 'bg-gradient-to-r from-red-400 to-rose-600'}
+          "></div>
+
+          <div class="flex items-center gap-4 mb-5">
+            <div class="w-14 h-14 rounded-full
+              ${isFounder ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}
+              flex items-center justify-center font-bold text-xl shadow-inner">
+              ${user.name ? user.name.charAt(0).toUpperCase() : 'U'}
+            </div>
+
+            <div class="flex-1">
+              <h2 class="text-lg font-bold text-gray-800">${user.name || 'No Name'}</h2>
+
+              <span class="
+                inline-block mt-1 text-xs font-semibold px-3 py-1 rounded-full
+                ${isFounder ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}
+              ">
+                ${isFounder ? 'Founder Backer' : 'Not Founder'}
+              </span>
+            </div>
+          </div>
+
+          <div class="space-y-2 mb-6 text-sm text-gray-600">
+            <p class="flex flex-col">
+              <span class="font-medium text-gray-500">Email</span>
+              <span class="font-mono text-gray-800">${user.email || 'N/A'}</span>
+            </p>
+
+            <p class="flex justify-between">
+              <span class="font-medium text-gray-500">Mobile</span>
+              <span class="font-mono text-gray-800">${user.mobile || 'N/A'}</span>
+            </p>
+
+            <p class="flex flex-col">
+              <span class="font-medium text-gray-500">Clerk UID</span>
+              <span class="font-mono text-xs text-gray-700 break-all">${clerkUserId || 'UID missing'}</span>
+            </p>
+          </div>
+
+          <button
+            onclick="toggleFounder('${user.id}', ${isFounder})"
+            class="w-full py-3 rounded-xl font-semibold text-white text-[16px]
+            transition-all duration-300 shadow-md hover:shadow-lg active:scale-95
+            ${isFounder
+              ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700'
+              : 'bg-gradient-to-r from-red-500 to-rose-600 hover:from-red-600 hover:to-rose-700'}
+          ">
+            ${isFounder ? 'Remove Founder Status' : 'Make Founder Backer'}
+          </button>
+
+          <button
+            onclick="deleteUser('${user.id}', '${clerkUserId}')"
+            class="w-full mt-3 py-3 rounded-xl font-semibold text-white text-[16px]
+            bg-gradient-to-r from-gray-700 to-black hover:from-gray-800 hover:to-gray-900
+            transition-all duration-300 shadow-md hover:shadow-lg active:scale-95">
+            Delete Test User
+          </button>
+
+          ${
+            earlyPaid
+              ? `
+                <button
+                  disabled
+                  class="w-full mt-3 py-3 rounded-xl font-semibold text-white text-[16px]
+                  bg-gradient-to-r from-green-500 to-emerald-600
+                  shadow-md cursor-not-allowed"
+                >
+                  $99 Payment Done
+                </button>
+              `
+              : `
+                <button
+                  onclick="generateRecoveryLink('${clerkUserId}')"
+                  class="w-full mt-3 py-3 rounded-xl font-semibold text-white text-[16px]
+                  bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700
+                  transition-all duration-300 shadow-md hover:shadow-lg active:scale-95"
+                >
+                  Generate $99 Payment Link
+                </button>
+              `
+          }
+        `;
+
+        container.appendChild(card);
+      });
+    }
+
+    async function generateRecoveryLink(clerkUserId) {
+      if (!clerkUserId) {
+        alert('User UID missing. Please update /api/foundbacker to return uid.');
+        return;
+      }
+
+      try {
+        const res = await fetch(`${window.API_BASE}/api/payment/stripe?generateRecoveryLink=true`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clerkUserId })
+        });
+
+        const data = await res.json();
+
+        if (!data.success) {
+          alert(data.error || 'Failed to generate payment link');
+          return;
+        }
+
+        await navigator.clipboard.writeText(data.paymentLink);
+        alert('Payment link copied:\n\n' + data.paymentLink);
+      } catch (error) {
+        console.error(error);
+        alert('Network error while generating payment link');
+      }
+    }
+
+    async function toggleFounder(userId, currentState) {
+      const newState = !currentState;
+      const formData = new FormData();
+      formData.append('userId', userId);
+      formData.append('isFounder', newState.toString());
+
+      try {
+        const res = await fetch(API_URL, {
+          method: 'PATCH',
+          body: formData
+        });
+
+        const result = await res.json();
+        if (result.success) {
+          loadUsers();
+        } else {
+          alert('Update failed');
+        }
+      } catch (err) {
+        alert('Network error');
+        console.error(err);
+      }
+    }
+
+    async function deleteUser(entryId, clerkUserId) {
+      const confirmed = confirm('Delete this test user from Clerk, Mainformdata, and users?');
+      if (!confirmed) return;
+
+      try {
+        const res = await fetch(API_URL, {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            entryId,
+            clerkUserId
+          })
+        });
+
+        const result = await res.json();
+        if (result.success) {
+          loadUsers();
+        } else {
+          alert(result.error || 'Delete failed');
+        }
+      } catch (err) {
+        alert('Network error while deleting user');
+        console.error(err);
+      }
+    }
+
+    loadUsers();
+  </script>
+</body>
+</html>

@@ -1,13 +1,57 @@
 import Stripe from 'stripe';
+import crypto from 'crypto';
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 import { createClerkClient } from '@clerk/backend';
 import { buffer } from 'micro';
+import { BrevoClient } from "@getbrevo/brevo";
 
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-  apiVersion: '2024-06-20'
-});
+// const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+//   apiVersion: '2024-06-20'
+// });
+
+const isLive = process.env.STRIPE_MODE === 'live';
+const STRIPE_TEST_PUBLISHABLE_KEY_FALLBACK = 'pk_test_51QO13Y01LGnCTELaFaus9Grax4NeSyEroahRIfs2fQhd3gqbO676LKIl8y4qCjYWYBiSTgGTYy7wSy96zNlmrR1V00ys63HzBF';
+
+function getStripeSecretKey(mode) {
+  return mode === 'live'
+    ? process.env.STRIPE_SECRET_KEY_LIVE
+    : process.env.STRIPE_SECRET_KEY_TEST;
+}
+
+function getStripePublishableKey(mode) {
+  return mode === 'live'
+    ? process.env.STRIPE_PUBLISHABLE_KEY_LIVE || process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY_LIVE
+    : process.env.STRIPE_PUBLISHABLE_KEY_TEST || process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY_TEST || STRIPE_TEST_PUBLISHABLE_KEY_FALLBACK;
+}
+
+function getStripeClient(mode) {
+  const secretKey = getStripeSecretKey(mode);
+
+  if (!secretKey) {
+    throw new Error(`Missing Stripe secret key for ${mode} mode`);
+  }
+
+  return new Stripe(secretKey, {
+    apiVersion: '2024-06-20'
+  });
+}
+
+const stripe = new Stripe(
+  getStripeSecretKey(isLive ? 'live' : 'test'),
+  {
+    apiVersion: '2024-06-20'
+  }
+);
+
+const STRIPE_WEBHOOK_SECRET = isLive
+  ? process.env.STRIPE_WEBHOOK_SECRET_LIVE
+  : process.env.STRIPE_WEBHOOK_SECRET_TEST;
+
+const STRIPE_PUBLISHABLE_KEY = getStripePublishableKey(isLive ? 'live' : 'test');
+const X_PIXEL_ID = 'rcajc';
+const X_EVENT_STEP5_ID = process.env.X_EVENT_STEP5_ID;
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
@@ -19,16 +63,105 @@ const clerkClient = createClerkClient({ secretKey: process.env.CLERK_SECRET_KEY 
 
 // 🔥 MASTER PLAN PRICES
 const PLAN_PRICES = {
-  loft: 1574.1,
-  studio: 2000,
-  "2bhk": 2500,
-  "4bhk": 3000
+  loft: 1925,
+  studio: 1925,
+  "1BR": 2530,
+  "2BR": 3135,
+};
+const PRICING = {
+  deposit: 99.00,
+  addon: 49.00
 };
 
 const REFUND_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 export const config = {
   api: { bodyParser: false }
 };
+
+function getPaymentFormAmount(paymentFormData) {
+  const legacyPrice = parseFloat(paymentFormData?.priceperfoot);
+  if (Number.isFinite(legacyPrice) && legacyPrice > 0) return legacyPrice;
+
+  const v3MonthlyPrice = parseFloat(paymentFormData?.monthlyPerPerson);
+  if (Number.isFinite(v3MonthlyPrice) && v3MonthlyPrice > 0) return v3MonthlyPrice;
+
+  return 0;
+}
+
+async function fireXPaymentEvent({
+  eventName,
+  conversionId,
+  email,
+  phone = '',
+  eventSourceUrl = '',
+  twclid = '',
+  req
+}) {
+  const eventId = eventName === 'step5_payment_info' ? X_EVENT_STEP5_ID : null;
+
+  if (!process.env.X_PIXEL_TOKEN) {
+    console.log('⚠️ X event skipped: X_PIXEL_TOKEN is missing');
+    return;
+  }
+
+  if (!eventId) {
+    console.log(`⚠️ X event skipped: missing event id for ${eventName}`);
+    return;
+  }
+
+  const identifiers = {};
+  const cleanTwclid = typeof twclid === 'string' ? twclid.trim() : '';
+  const cleanEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  const cleanPhone = typeof phone === 'string' ? phone.trim() : '';
+  const forwarded = req?.headers?.['x-forwarded-for'];
+  const ipAddress = typeof forwarded === 'string' && forwarded.trim()
+    ? forwarded.split(',')[0].trim()
+    : req?.socket?.remoteAddress || '';
+  const userAgent = typeof req?.headers?.['user-agent'] === 'string'
+    ? req.headers['user-agent'].trim()
+    : '';
+
+  if (cleanTwclid) identifiers.twclid = cleanTwclid;
+  if (cleanEmail) identifiers.hashed_email = crypto.createHash('sha256').update(cleanEmail).digest('hex');
+  if (cleanPhone) identifiers.hashed_phone_number = crypto.createHash('sha256').update(cleanPhone).digest('hex');
+  if (ipAddress && userAgent) {
+    identifiers.ip_address = ipAddress;
+    identifiers.user_agent = userAgent;
+  }
+
+  if (!Object.keys(identifiers).length) {
+    console.log(`⚠️ X event skipped: no identifiers available for ${eventName}`);
+    return;
+  }
+
+  const payload = {
+    conversions: [
+      {
+        conversion_time: new Date().toISOString(),
+        event_id: eventId,
+        event_source_url: eventSourceUrl || '',
+        conversion_id: conversionId,
+        identifiers: [identifiers],
+      },
+    ],
+  };
+
+  const response = await fetch(`https://ads-api.x.com/12/measurement/conversions/${X_PIXEL_ID}`, {
+    method: 'POST',
+    headers: {
+      'X-Pixel-Token': process.env.X_PIXEL_TOKEN,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const responseText = await response.text();
+  if (!response.ok) {
+    throw new Error(`X CAPI failed (${response.status}): ${responseText}`);
+  }
+
+  console.log(`✅ X event sent: ${eventName}`);
+}
 
 /* =========================
    CLERK VERIFY
@@ -66,6 +199,26 @@ export default async function handler(req, res) {
     });
   }
 
+  if (req.method === 'GET' && req.query.config) {
+    const requestedMode = req.query.mode === 'test'
+      ? 'test'
+      : req.query.mode === 'live'
+        ? 'live'
+        : (isLive ? 'live' : 'test');
+    const publishableKey = getStripePublishableKey(requestedMode);
+
+    if (!publishableKey) {
+      return res.status(500).json({
+        error: `Missing Stripe publishable key for ${requestedMode} mode`
+      });
+    }
+
+    return res.json({
+      publishableKey,
+      mode: requestedMode
+    });
+  }
+
   if (req.method === 'OPTIONS') {
     res.status(200).end();
     return;
@@ -79,7 +232,8 @@ export default async function handler(req, res) {
   if (signature) {
     try {
       const body = await buffer(req);
-      const event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET);
+      // const event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET);
+      const event = stripe.webhooks.constructEvent(body, signature, STRIPE_WEBHOOK_SECRET);
       console.log(`🔔 Webhook: ${event.type}`);
 
       if (event.type === 'payment_intent.succeeded' || event.type === 'payment_intent.payment_failed') {
@@ -100,14 +254,35 @@ export default async function handler(req, res) {
 
           const isUpgrade = paymentIntent.metadata?.upgrade === "true";
 
+          const baseAmount = parseFloat(paymentIntent.metadata?.baseAmount || 0);
+          const addonAmount = parseFloat(paymentIntent.metadata?.addonAmount || 0);
+          const totalAmount = paymentIntent.amount / 100;
+          const amountPaid = paymentIntent.amount / 100;
+          const fullAmount = parseFloat(paymentIntent.metadata?.fullAmount || amountPaid);
           const updateData = {
             paymentStatus: event.type === 'payment_intent.succeeded' ? 'success' : 'failed',
             stripeChargeId: paymentIntent.latest_charge,
             ...(!isUpgrade && { stripePaymentIntentId: paymentIntent.id }),
+            // ✅ NEW STRUCTURE
+            ...(paymentType === 'deposit' && {
+              depositAmount: baseAmount,
+              addonAmount: addonAmount,
+              totalAmount: totalAmount
+            }),
+
             amount: paymentIntent.amount / 100,
+            amountPaid: amountPaid,      // NEW (clear naming)
+            fullAmount: fullAmount,
+            customerId: paymentIntent.customer,           // ⭐ ADD
+            paymentMethodId: paymentIntent.payment_method, // ⭐ ADD
             processedAt: Date.now(),
             lastWebhookEvent: event.type,
-            paymentType
+            paymentType,
+            deviceInfo: {
+              browser: paymentIntent.metadata?.browser || '',
+              device: paymentIntent.metadata?.device || '',
+              os: paymentIntent.metadata?.os || ''
+            }
           };
 
           if (event.type === 'payment_intent.payment_failed') {
@@ -116,16 +291,213 @@ export default async function handler(req, res) {
 
           await db.ref(`Mainformdata/${firebaseEntryKey}/${paymentPath}`).update(updateData);
           console.log(`✅ Webhook ${paymentType}: ${firebaseEntryKey}`);
+          if (paymentType === 'deposit') {
+            console.log('🚀 DEPOSIT WEBHOOK X EVENT SECTION');
+          }
+
+          if (paymentType === 'deposit' && event.type === 'payment_intent.succeeded') {
+            console.log('🚀 DEPOSIT BLOCK 1/4');
+            await db.ref(`Mainformdata/${firebaseEntryKey}/resume`).update({
+              earlyApplicationPaid: true,
+              currentStep: 3,
+              lastCompletedStep: 2
+            });
+            const recoveryToken = paymentIntent.metadata?.recoveryToken;
+            const paidFromRecoveryLink = paymentIntent.metadata?.paidFromRecoveryLink === 'true';
+
+            if (recoveryToken) {
+              await db.ref(`recoveryPaymentLinks/${recoveryToken}`).update({
+                status: 'paid',
+                used: true,
+                paidAt: Date.now(),
+                stripePaymentIntentId: paymentIntent.id
+              });
+            }
+
+            if (paidFromRecoveryLink) {
+              await db.ref(`Mainformdata/${firebaseEntryKey}/stripePayment`).update({
+                paymentSource: 'admin_recovery_link',
+                paidFromRecoveryLink: true,
+                recoveryToken: recoveryToken || null
+              });
+            }
+            console.log('🚀 DEPOSIT BLOCK 2/4 - RESUME DONE');
+            console.log(`✅ Resume updated for deposit success: ${firebaseEntryKey}`);
+            console.log('🚀 DEPOSIT BLOCK 3/4 - BREVO NEXT');
+            console.log('🚀 DEPOSIT BLOCK 3.5/4 - X EVENT NEXT');
+            try {
+              const userSnap = await db.ref(`Mainformdata/${firebaseEntryKey}`).once('value');
+              const userData = userSnap.val();
+
+              const emailLower =
+                userData?.email?.toLowerCase() ||
+                userData?.PaymentFormData?.useremail?.toLowerCase();
+
+              await fireXPaymentEvent({
+                eventName: 'step5_payment_info',
+                conversionId: `funnel-v3-step5_payment_info-${paymentIntent.id}`,
+                email: emailLower || '',
+                eventSourceUrl: paymentIntent.metadata?.eventSourceUrl || '',
+                twclid: paymentIntent.metadata?.twclid || '',
+                req,
+              });
+            } catch (xError) {
+              console.error('❌ X payment event error:', xError.message || xError);
+            }
+            // BREVO CODE START
+
+            try {
+              const client = new BrevoClient({
+                apiKey: process.env.BREVO_API_KEY,
+              });
+
+              const userSnap = await db.ref(`Mainformdata/${firebaseEntryKey}`).once('value');
+              const userData = userSnap.val();
+
+              const emailLower =
+                userData?.email?.toLowerCase() ||
+                userData?.PaymentFormData?.useremail?.toLowerCase();
+              console.log("Resolved email for step 3:", emailLower);
+              if (emailLower) {
+                await fetch("https://api.brevo.com/v3/contacts", {
+                  method: "POST",
+                  headers: {
+                    "api-key": process.env.BREVO_API_KEY,
+                    "Content-Type": "application/json"
+                  },
+                  body: JSON.stringify({
+                    email: emailLower,
+                    attributes: {
+                      EARLY_APPLICATION: true,
+                      EARLY_APPLICATION_PAID_AT: new Date().toISOString(),
+                      EARLY_APPLICATION_AMOUNT: baseAmount
+                    },
+                    updateEnabled: true
+                  })
+                });
+
+                await client.event.createEvent({
+                  event_name: "early_application_paid",
+                  identifiers: {
+                    email_id: emailLower
+                  }
+                });
+
+                console.log("✅ Step 3 Brevo event sent");
+              } else {
+                console.log("⚠️ Brevo skipped: no email found");
+              }
+            } catch (brevoError) {
+              console.error("❌ Brevo error:", brevoError.message || brevoError);
+            }
+            console.log('🚀 DEPOSIT BLOCK 4/4 - ALL DONE');
+            // BREVO CODE END
+
+          }
 
           // 🔥 CORRECT - FIRST TIME ONLY
+          // if (paymentType === 'backer' && event.type === 'payment_intent.succeeded') {
+          //   const backerRef = db.ref(`Mainformdata/${firebaseEntryKey}/backerPayment`);
+          //   const snap = await backerRef.once('value');
+          //   if (!snap.val()?.refundWindowStart) {  // ← CHECK EXISTS
+          //     await backerRef.update({
+          //       refundWindowStart: Date.now(),
+          //       refundStatus: 'eligible'
+          //     });
+          //   }
+          //   await db.ref(`Mainformdata/${firebaseEntryKey}/resume`).update({
+          //     foundingBackerPaid: true,
+          //     currentStep: 4,
+          //     lastCompletedStep: 4
+          //   });
+          //   console.log(`✅ Backer payment success + resume updated: ${firebaseEntryKey}`);
+          // }
+
+
           if (paymentType === 'backer' && event.type === 'payment_intent.succeeded') {
             const backerRef = db.ref(`Mainformdata/${firebaseEntryKey}/backerPayment`);
             const snap = await backerRef.once('value');
-            if (!snap.val()?.refundWindowStart) {  // ← CHECK EXISTS
+
+            if (!snap.val()?.refundWindowStart) {
+
+              // 🔹 1. Update DB
               await backerRef.update({
                 refundWindowStart: Date.now(),
                 refundStatus: 'eligible'
               });
+
+              await db.ref(`Mainformdata/${firebaseEntryKey}/resume`).update({
+                foundingBackerPaid: true,
+                currentStep: 4,
+                lastCompletedStep: 3
+              });
+
+              console.log(`✅ Backer payment success: ${firebaseEntryKey}`);
+
+              // 🔹 2. BREVO TRIGGER (Workflow 5)
+              try {
+                const client = new BrevoClient({
+                  apiKey: process.env.BREVO_API_KEY,
+                });
+
+                const userSnap = await db.ref(`Mainformdata/${firebaseEntryKey}`).once('value');
+                const userData = userSnap.val();
+
+                const email =
+                  userData?.email?.toLowerCase() ||
+                  userData?.PaymentFormData?.useremail?.toLowerCase();
+
+
+                if (email) {
+                  const pledge = getPaymentFormAmount(userData?.PaymentFormData);
+                  const depositAmount = parseFloat(userData?.stripePayment?.totalAmount || 0);
+
+                  const amountDueNow = depositAmount > 0
+                    ? Math.max(0, pledge - depositAmount)
+                    : pledge;
+                  const refundDeadline = new Date(Date.now() + (90 * 24 * 60 * 60 * 1000));
+                  const formattedDeadline = refundDeadline.toLocaleDateString("en-US", {
+                    year: "numeric",
+                    month: "long",
+                    day: "numeric"
+                  });
+                  // ✅ Update attributes
+                  await fetch("https://api.brevo.com/v3/contacts", {
+                    method: "POST",
+                    headers: {
+                      "api-key": process.env.BREVO_API_KEY,
+                      "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                      email,
+                      attributes: {
+                        FOUNDING_BACKER: true,
+                        FOUNDING_BACKER_PAID_AT: new Date().toISOString(),
+                        FOUNDING_BACKER_PLEDGE_TOTAL: pledge,
+                        FOUNDING_BACKER_AMOUNT_DUE_NOW: amountDueNow,
+                        FOUNDING_BACKER_TOTAL_PAID: pledge,
+                        FOUNDING_BACKER_REFUND_DEADLINE: formattedDeadline,
+                        APPLICATION_STATUS: "PENDING"
+                      },
+                      updateEnabled: true
+                    })
+                  });
+
+                  // ✅ Fire event → starts Workflow 5
+                  await client.event.createEvent({
+                    event_name: "founding_backer_purchased",
+                    identifiers: { email_id: email }
+                  });
+
+                  console.log("✅ Workflow 5 triggered");
+
+                } else {
+                  console.log("⚠️ No email found");
+                }
+
+              } catch (err) {
+                console.error("❌ Brevo error:", err.message || err);
+              }
             }
           }
 
@@ -137,7 +509,7 @@ export default async function handler(req, res) {
             const userRef = db.ref(`Mainformdata/${firebaseEntryKey}`);
             const snap = await userRef.once('value');
             const userData = snap.val();
-            const oldPlanPrice = parseFloat(userData?.PaymentFormData?.priceperfoot || 0);
+            const oldPlanPrice = getPaymentFormAmount(userData?.PaymentFormData);
 
             // Update current plan
             await userRef.child('PaymentFormData').update({
@@ -147,7 +519,7 @@ export default async function handler(req, res) {
 
             // Set full backer amount
             await userRef.child('backerPayment').update({
-              amount: newPlanPrice,
+              fullAmount: newPlanPrice,
               lastWebhookEvent: "upgrade_success"
             });
 
@@ -165,46 +537,155 @@ export default async function handler(req, res) {
           }
         }
         /* 🔥 BUILDER INSTALLMENT WEBHOOK */
-        if (event.type === 'payment_intent.succeeded' && paymentIntent.metadata?.installmentIndex !== undefined) {
+        if (
+          event.type === 'payment_intent.succeeded' &&
+          paymentIntent.metadata?.installmentIndex !== undefined
+        ) {
           const { firebaseEntryKey, installmentIndex } = paymentIntent.metadata;
 
-          console.log(`🔥 BUILDER WEBHOOK TRIGGERED: ${firebaseEntryKey}[${installmentIndex}] $${paymentIntent.amount / 100}`);
+          console.log(
+            `🔥 BUILDER WEBHOOK: ${firebaseEntryKey}[${installmentIndex}] $${paymentIntent.amount / 100}`
+          );
 
           try {
-            // Update EXACT schedule node
-            const scheduleRef = db.ref(`Mainformdata/${firebaseEntryKey}/builderPlan/schedule/${installmentIndex}`);
-            console.log('🔄 Updating schedule ref:', scheduleRef.toString());
+            const scheduleRef = db.ref(
+              `Mainformdata/${firebaseEntryKey}/builderPlan/schedule/${installmentIndex}`
+            );
 
+            // ✅ 1. PREVENT DUPLICATE WEBHOOK (VERY IMPORTANT)
+            const existingSnap = await scheduleRef.once('value');
+            const existingData = existingSnap.val();
+
+            if (existingData?.status === 'paid') {
+              console.log('⚠️ Already processed, skipping');
+              return;
+            }
+
+            // ✅ 2. MARK AS PAID
             await scheduleRef.update({
               status: 'paid',
+              paymentStatus: 'success',
               stripePaymentIntentId: paymentIntent.id,
               stripeChargeId: paymentIntent.latest_charge,
               amountPaid: paymentIntent.amount / 100,
-              paidAt: Date.now(),
-              paymentStatus: 'success'
+              paidAt: Date.now()
             });
+            try {
+              const userSnap = await db.ref(`Mainformdata/${firebaseEntryKey}`).once('value');
+              const userData = userSnap.val();
+
+              const email =
+                userData?.email?.toLowerCase() ||
+                userData?.PaymentFormData?.useremail?.toLowerCase();
+
+              if (email) {
+
+                const amount = paymentIntent.amount / 100;
+                const installmentNumber = parseInt(installmentIndex) + 1;
+
+                // ✅ 1. Update contact (optional but recommended)
+                await fetch("https://api.brevo.com/v3/contacts", {
+                  method: "POST",
+                  headers: {
+                    "api-key": process.env.BREVO_API_KEY,
+                    "Content-Type": "application/json"
+                  },
+                  body: JSON.stringify({
+                    email,
+                    attributes: {
+                      LAST_BUILDER_PAYMENT_AMOUNT: amount,
+                      LAST_BUILDER_INSTALLMENT: installmentNumber,
+                      LAST_BUILDER_PAYMENT_AT: new Date().toISOString()
+                    },
+                    updateEnabled: true
+                  })
+                });
+
+                // ✅ 2. Trigger event
+                const client = new BrevoClient({
+                  apiKey: process.env.BREVO_API_KEY,
+                });
+
+                await client.event.createEvent({
+                  event_name: "builder_installment_paid",
+                  identifiers: {
+                    email_id: email
+                  },
+                  data: {
+                    amount,
+                    installmentNumber
+                  }
+                });
+
+                console.log("✅ Builder success workflow triggered");
+
+              } else {
+                console.log("⚠️ No email found");
+              }
+
+            } catch (err) {
+              console.error("❌ Brevo error:", err.message);
+            }
             console.log(`✅ SCHEDULE UPDATED: ${firebaseEntryKey}[${installmentIndex}]`);
 
-            // Decrement counter
+
+            // ✅ 3. REMOVE FROM duePayments
             const planRef = db.ref(`Mainformdata/${firebaseEntryKey}/builderPlan`);
             const planSnap = await planRef.once('value');
             const planData = planSnap.val();
 
-            console.log('📊 Plan data:', planData?.installmentsRemaining);
+            const installmentDate = planData?.schedule?.[installmentIndex]?.date;
 
-            if (planData?.installmentsRemaining > 1) {
+            if (installmentDate) {
+              await db
+                .ref(`duePayments/${installmentDate}/${firebaseEntryKey}`)
+                .remove();
+
+              console.log(`🧹 Removed from duePayments: ${installmentDate}`);
+            }
+
+            // ✅ 4. DECREMENT INSTALLMENTS SAFELY
+            if (planData?.installmentsRemaining > 0) {
               await planRef.update({
                 installmentsRemaining: planData.installmentsRemaining - 1
               });
-              console.log(`✅ COUNTER DECREMENTED: ${planData.installmentsRemaining} → ${planData.installmentsRemaining - 1}`);
+
+              console.log(
+                `📉 Remaining: ${planData.installmentsRemaining} → ${planData.installmentsRemaining - 1
+                }`
+              );
             }
 
-          } catch (updateError) {
-            console.error('❌ BUILDER UPDATE FAILED:', updateError);
-            // Don't let errors crash webhook
+          } catch (error) {
+            console.error('❌ BUILDER WEBHOOK ERROR:', error.message);
           }
         }
 
+
+
+
+        // 🔴 BUILDER INSTALLMENT FAILED
+        if (event.type === 'payment_intent.payment_failed' && paymentIntent.metadata?.installmentIndex !== undefined) {
+          const { firebaseEntryKey, installmentIndex } = paymentIntent.metadata;
+
+          console.log(`❌ BUILDER PAYMENT FAILED: ${firebaseEntryKey}[${installmentIndex}]`);
+
+          try {
+            const scheduleRef = db.ref(`Mainformdata/${firebaseEntryKey}/builderPlan/schedule/${installmentIndex}`);
+
+            await scheduleRef.update({
+              status: 'failed',
+              paymentStatus: 'failed',
+              failedAt: Date.now(),
+              error: paymentIntent.last_payment_error?.message || "Payment failed"
+            });
+
+            console.log(`❌ SCHEDULE MARKED FAILED: ${firebaseEntryKey}[${installmentIndex}]`);
+
+          } catch (err) {
+            console.error("❌ FAILED HANDLER ERROR:", err);
+          }
+        }
 
       }
       /* ===============================================
@@ -277,9 +758,9 @@ export default async function handler(req, res) {
   ===================================================== */
   if (req.method === 'GET' && req.query.pricing) {
     return res.json({
-      deposit: 99.00,
-      backer: 2000.00,  // Fallback
-      addon: 29.95,
+      deposit: PRICING.deposit,
+      backer: 2000.00,
+      addon: PRICING.addon,
       plans: PLAN_PRICES
     });
   }
@@ -299,7 +780,7 @@ export default async function handler(req, res) {
       const entryKey = Object.keys(snapshotVal)[0];
       const paymentFormData = snapshotVal[entryKey]?.PaymentFormData;
 
-      const backerPrice = parseFloat(paymentFormData?.priceperfoot) || 0;
+      const backerPrice = getPaymentFormAmount(paymentFormData);
       if (backerPrice === 0) {
         return res.status(404).json({ error: 'No priceperfoot found' });
       }
@@ -383,10 +864,20 @@ export default async function handler(req, res) {
         }
       }
 
-      // Normal case
+      // // Normal case
+      // return res.json({
+      //   refundStatus: backerData.refundStatus,
+      //   refundEligible: backerData.refundStatus === 'eligible',
+      //   entryKey
+      // });
+
+      const stripeStatus = backerData?.refund?.status || null;
+
       return res.json({
-        refundStatus: backerData.refundStatus,
-        refundEligible: backerData.refundStatus === 'eligible',
+        refundStatus: backerData.refundStatus,   // ✅ existing (unchanged)
+        stripeRefundStatus: stripeStatus,        // ✅ new
+        refundEligible: backerData.refundStatus === 'eligible', // unchanged
+        allRefund: snapshotVal[entryKey]?.allRefund || false,   // new
         entryKey
       });
 
@@ -406,16 +897,28 @@ export default async function handler(req, res) {
       if (!clerkUserId) return res.status(400).json({ paymentStatus: 'unknown' });
 
       const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
-      if (!snapshot.exists()) return res.json({ paymentStatus: 'no_data' });
+      if (!snapshot.exists()) return res.json({
+        paymentStatus: 'no_data', searchedUid: clerkUserId,
+        firebaseUrl: process.env.FIREBASE_URL
+      });
 
       const snapshotVal = snapshot.val();
       const entryKey = Object.keys(snapshotVal)[0];
       const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
       const paymentData = snapshotVal[entryKey]?.[paymentPath];
 
+      // return res.json({
+      //   paymentStatus: paymentData?.paymentStatus || 'no_data',
+      //   paymentData,
+      //   entryKey,
+      //   paymentType,
+      //   paymentPath
+      // });
       return res.json({
         paymentStatus: paymentData?.paymentStatus || 'no_data',
         paymentData,
+        paymentFormData: snapshotVal[entryKey]?.PaymentFormData || null,
+        resume: snapshotVal[entryKey]?.resume || null,
         entryKey,
         paymentType,
         paymentPath
@@ -447,21 +950,92 @@ export default async function handler(req, res) {
 
       const snapshotVal = snapshot.val();
       const entryKey = Object.keys(snapshotVal)[0];
+      // ⭐ ADD THIS BLOCK
+      const userSnap = await db.ref(`Mainformdata/${entryKey}`).once('value');
+      const userData = userSnap.val();
+
+      const customerId = userData?.stripeCustomerId;
+      const paymentMethodId =
+        userData?.backerPayment?.paymentMethodId ||
+        userData?.stripePayment?.paymentMethodId;
 
       await db.ref(`Mainformdata/${entryKey}/builderPlan`).set({
         planType,
         ...(months && { months }),
+        customerId,        // ⭐ ADDED
+        paymentMethodId,   // ⭐ ADDED
         totalBuilderAmount: parseFloat(totalBuilderAmount),
         backerAmount: parseFloat(backerAmount),
         installmentAmount: parseFloat(installmentAmount),
-        schedule: schedule.map(p => ({ date: p.date, amount: parseFloat(p.amount) })),
+        schedule: schedule.map(p => ({
+          date: p.date,
+          amount: parseFloat(p.amount),
+          paymentStatus: p.paymentStatus || "pending",
+          status: p.status || "pending"
+        })),
         installmentsRemaining: schedule.length,
         nextDue: schedule[0]?.date,
         status: 'active',
         createdAt: Date.now()
       });
+      await Promise.all(
+        schedule.map(item =>
+          db.ref(`duePayments/${item.date}/${entryKey}`).set(true)
+        )
+      );
 
       console.log(`✅ Builder plan saved: ${entryKey}`);
+      try {
+        const client = new BrevoClient({
+          apiKey: process.env.BREVO_API_KEY,
+        });
+
+        const userSnap = await db.ref(`Mainformdata/${entryKey}`).once('value');
+        const userData = userSnap.val();
+
+        const email = userData?.email.toLowerCase();
+        // userData?.email?.toLowerCase() ||
+        // userData?.PaymentFormData?.useremail?.toLowerCase();
+
+        if (email) {
+          console.log("Foundign builder email", email)
+          // ✅ Update attributes
+          await fetch("https://api.brevo.com/v3/contacts", {
+            method: "POST",
+            headers: {
+              "api-key": process.env.BREVO_API_KEY,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              email,
+              attributes: {
+                FOUNDING_BUILDER: true,
+                FOUNDING_BUILDER_OPTED_AT: new Date().toISOString(),
+                BUILDER_SCHEDULE_SELECTED: true,
+                BUILDER_PLAN_SELECTED: planType || "CUSTOM",
+                BUILDER_TOTAL_COMMITMENT: parseFloat(totalBuilderAmount)
+              },
+              updateEnabled: true
+            })
+          });
+
+          // ✅ Trigger event → starts Workflow 7
+          await client.event.createEvent({
+            event_name: "founding_builder_opted_in",
+            identifiers: {
+              email_id: email
+            }
+          });
+
+          console.log("✅ Workflow 7 triggered");
+
+        } else {
+          console.log("⚠️ No email found for builder");
+        }
+
+      } catch (err) {
+        console.error("❌ Brevo Builder error:", err.message || err);
+      }
       return res.json({
         success: true,
         entryKey,
@@ -788,36 +1362,278 @@ export default async function handler(req, res) {
     }
   }
 
-
-  /* =====================================================
-     🔥 CREATE PAYMENT INTENT (DEPOSIT/BACKER/UPGRADE)
-  ===================================================== */
-  if (req.method === 'POST') {
+  // ==========================================
+  // FREE FOUNDING BACKER FLOW
+  // ==========================================
+  if (req.method === 'POST' && req.query.freeBacker === 'true') {
     try {
+
       const body = await buffer(req);
-      const {
-        clerkUserId,
-        paymentType = 'deposit',
-        addons = [],
-        dynamicAmount,
-        targetPlan  // 🔥 UPGRADE SUPPORT
-      } = JSON.parse(body.toString());
+      const { clerkUserId } = JSON.parse(body.toString());
 
       if (!clerkUserId) {
         return res.status(400).json({ error: 'Missing clerkUserId' });
       }
 
-      console.log(`🔍 ${paymentType} for ${clerkUserId}, targetPlan: ${targetPlan}`);
+      // Find user in Firebase
+      const snapshot = await db.ref('Mainformdata')
+        .orderByChild('uid')
+        .equalTo(clerkUserId)
+        .once('value');
 
-      // 🔥 FETCH USER FIRST
-      const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
       if (!snapshot.exists()) {
-        return res.status(404).json({ error: 'No user data found' });
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const snapshotVal = snapshot.val();
+      const firebaseEntryKey = Object.keys(snapshotVal)[0];
+
+      // Update resume node
+      await db.ref(`Mainformdata/${firebaseEntryKey}/resume`).update({
+        earlyApplicationPaid: false,
+        currentStep: 4,
+        lastCompletedStep: 3
+      });
+
+      console.log(`✅ Free founding backer updated: ${firebaseEntryKey}`);
+
+      return res.json({
+        success: true,
+        firebaseEntryKey
+      });
+
+    } catch (error) {
+      console.error('❌ Free backer error:', error);
+
+      return res.status(500).json({
+        error: 'Free backer update failed'
+      });
+    }
+  }
+
+  // ==========================================
+  // PAID EARLY APPLICATION CONTINUE FLOW
+  // ==========================================
+  if (req.method === 'POST' && req.query.paidEarlyContinue === 'true') {
+    try {
+      const body = await buffer(req);
+      const { clerkUserId } = JSON.parse(body.toString());
+
+      if (!clerkUserId) {
+        return res.status(400).json({ error: 'Missing clerkUserId' });
+      }
+
+      const snapshot = await db.ref('Mainformdata')
+        .orderByChild('uid')
+        .equalTo(clerkUserId)
+        .once('value');
+
+      if (!snapshot.exists()) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const snapshotVal = snapshot.val();
+      const firebaseEntryKey = Object.keys(snapshotVal)[0];
+      const userData = snapshotVal[firebaseEntryKey];
+
+      if (userData?.resume?.earlyApplicationPaid !== true) {
+        return res.status(400).json({ error: 'Early application payment not completed' });
+      }
+
+      await db.ref(`Mainformdata/${firebaseEntryKey}/resume`).update({
+        earlyApplicationPaid: true,
+        currentStep: 4,
+        lastCompletedStep: 3
+      });
+
+      console.log(`✅ Paid early application continued: ${firebaseEntryKey}`);
+
+      return res.json({
+        success: true,
+        firebaseEntryKey
+      });
+
+    } catch (error) {
+      console.error('❌ Paid early continue error:', error);
+
+      return res.status(500).json({
+        error: 'Paid early continue update failed'
+      });
+    }
+  }
+
+
+  /* =====================================================
+   GENERATE $99 RECOVERY PAYMENT LINK
+===================================================== */
+  if (req.method === 'POST' && req.query.generateRecoveryLink === 'true') {
+    try {
+      const body = await buffer(req);
+      const { clerkUserId } = JSON.parse(body.toString());
+
+      if (!clerkUserId) {
+        return res.status(400).json({ error: 'Missing clerkUserId' });
+      }
+
+      const snapshot = await db.ref('Mainformdata')
+        .orderByChild('uid')
+        .equalTo(clerkUserId)
+        .once('value');
+
+      if (!snapshot.exists()) {
+        return res.status(404).json({ error: 'User not found' });
       }
 
       const snapshotVal = snapshot.val();
       const entryKey = Object.keys(snapshotVal)[0];
       const userData = snapshotVal[entryKey];
+
+      const token = Date.now().toString(36) + Math.random().toString(36).substring(2, 12);
+
+      await db.ref(`recoveryPaymentLinks/${token}`).set({
+        token,
+        clerkUserId,
+        entryKey,
+        email: userData?.email || userData?.PaymentFormData?.useremail || '',
+        name: userData?.name || '',
+        amount: 99,
+        status: 'created',
+        paymentSource: 'admin_recovery_link',
+        createdAt: Date.now(),
+        used: false
+      });
+
+      const paymentLink = `https://elysiumcommunities.com/pay-99?token=${token}`;
+
+      return res.json({
+        success: true,
+        paymentLink,
+        token,
+        entryKey
+      });
+
+    } catch (error) {
+      console.error('❌ Recovery link error:', error);
+      return res.status(500).json({ error: 'Recovery link generation failed' });
+    }
+  }
+  /* =====================================================
+     🔥 CREATE PAYMENT INTENT (DEPOSIT/BACKER/UPGRADE)
+  ===================================================== */
+
+
+  if (req.method === 'POST') {
+    try {
+      const body = await buffer(req);
+      // const {
+      //   clerkUserId,
+      //   paymentType = 'deposit',
+      //   addons = [],
+      //   dynamicAmount,
+      //   targetPlan  // 🔥 UPGRADE SUPPORT
+      // } = JSON.parse(body.toString());
+
+      // if (!clerkUserId) {
+      //   return res.status(400).json({ error: 'Missing clerkUserId' });
+      // }
+
+      // console.log(`🔍 ${paymentType} for ${clerkUserId}, targetPlan: ${targetPlan}`);
+
+      // // 🔥 FETCH USER FIRST
+      // const snapshot = await db.ref('Mainformdata').orderByChild('uid').equalTo(clerkUserId).once('value');
+      // if (!snapshot.exists()) {
+      //   return res.status(404).json({ error: 'No user data found' });
+      // }
+
+      // const snapshotVal = snapshot.val();
+      // const entryKey = Object.keys(snapshotVal)[0];
+      // const userData = snapshotVal[entryKey];
+      const {
+        clerkUserId,
+        recoveryToken,
+        paymentType = 'deposit',
+        addons = [],
+        deviceInfo = {},
+        dynamicAmount,
+        targetPlan,
+        stripeMode
+      } = JSON.parse(body.toString());
+      const requestedStripeMode = stripeMode === 'test'
+        ? 'test'
+        : stripeMode === 'live'
+          ? 'live'
+          : (isLive ? 'live' : 'test');
+      const activeStripe = requestedStripeMode === (isLive ? 'live' : 'test')
+        ? stripe
+        : getStripeClient(requestedStripeMode);
+
+      if (!clerkUserId && !recoveryToken) {
+        return res.status(400).json({ error: 'Missing clerkUserId or recoveryToken' });
+      }
+
+      console.log(`🔍 ${paymentType} for ${clerkUserId || recoveryToken}, targetPlan: ${targetPlan}, stripeMode: ${requestedStripeMode}`);
+
+      let entryKey;
+      let userData;
+      let finalClerkUserId = clerkUserId;
+      let isRecoveryPayment = false;
+
+      if (recoveryToken) {
+        const tokenSnap = await db.ref(`recoveryPaymentLinks/${recoveryToken}`).once('value');
+
+        if (!tokenSnap.exists()) {
+          return res.status(404).json({ error: 'Invalid payment link' });
+        }
+
+        const tokenData = tokenSnap.val();
+
+        if (tokenData.used === true || tokenData.status === 'paid') {
+          return res.status(400).json({ error: 'This payment link has already been used' });
+        }
+
+        entryKey = tokenData.entryKey;
+        finalClerkUserId = tokenData.clerkUserId;
+        isRecoveryPayment = true;
+
+        const userSnap = await db.ref(`Mainformdata/${entryKey}`).once('value');
+
+        if (!userSnap.exists()) {
+          return res.status(404).json({ error: 'User record not found' });
+        }
+
+        userData = userSnap.val();
+
+      } else {
+        const snapshot = await db.ref('Mainformdata')
+          .orderByChild('uid')
+          .equalTo(clerkUserId)
+          .once('value');
+
+        if (!snapshot.exists()) {
+          return res.status(404).json({ error: 'No user data found' });
+        }
+
+        const snapshotVal = snapshot.val();
+        entryKey = Object.keys(snapshotVal)[0];
+        userData = snapshotVal[entryKey];
+      }
+
+      const customerIdField = requestedStripeMode === 'test' ? 'stripeCustomerIdTest' : 'stripeCustomerId';
+      let customerId = userData?.[customerIdField];
+
+      if (!customerId) {
+        const customer = await activeStripe.customers.create({
+          email: userData?.email || "noemail@example.com"
+        });
+
+        customerId = customer.id;
+
+        await db.ref(`Mainformdata/${entryKey}`).update({
+          [customerIdField]: customerId
+        });
+
+        console.log(`✅ New ${requestedStripeMode} customer created:`, customerId);
+      }
 
       // 🔥 PRICING LOGIC
       let totalAmount;
@@ -840,7 +1656,7 @@ export default async function handler(req, res) {
           return res.status(400).json({ error: 'Upgrade window expired (90 days passed)' });
         }
 
-        const currentPaid = parseFloat(backer?.amount || 0);
+        const currentPaid = parseFloat(backer?.fullAmount || 0);
         const newPlanPrice = PLAN_PRICES[targetPlan];
 
         if (!newPlanPrice) {
@@ -856,18 +1672,37 @@ export default async function handler(req, res) {
         totalAmount = upgradeAmount;
       }
       /* FIRST FULL BACKER */
+      // else if (paymentType === 'backer') {
+      //   const dbPrice = parseFloat(userData?.PaymentFormData?.priceperfoot || 0);
+      //   if (!dbPrice) {
+      //     return res.status(400).json({ error: 'No unit price in DB' });
+      //   }
+      //   totalAmount = dbPrice;
+      // }
+
       else if (paymentType === 'backer') {
-        const dbPrice = parseFloat(userData?.PaymentFormData?.priceperfoot || 0);
-        if (!dbPrice) {
-          return res.status(400).json({ error: 'No unit price in DB' });
+        const dbPrice = getPaymentFormAmount(userData?.PaymentFormData);
+
+        // ✅ ONLY deduct if webhook has confirmed deposit
+        const depositPaid = userData?.resume?.earlyApplicationPaid === true;
+
+        const depositAmount = parseFloat(userData?.stripePayment?.depositAmount || 99);
+
+        if (depositPaid) {
+          console.log(`✅ Deposit verified → deducting $${depositAmount}`);
+        } else {
+          console.log("⚠️ No verified deposit → full amount charged");
         }
-        totalAmount = dbPrice;
+
+        totalAmount = depositPaid
+          ? Math.max(0, dbPrice - depositAmount)
+          : dbPrice;
       }
       /* DEPOSIT */
       else {
-        const BASE_PRICE = 99.00;
-        const ADDON_PRICE = 29.95;
-        totalAmount = BASE_PRICE + (addons.length ? ADDON_PRICE : 0);
+        const BASE_PRICE = PRICING.deposit;
+        const ADDON_PRICE = PRICING.addon;
+        totalAmount = BASE_PRICE + (Array.isArray(addons) && addons.length > 0 ? ADDON_PRICE : 0);
       }
 
       if (totalAmount < 0.50) {
@@ -875,12 +1710,18 @@ export default async function handler(req, res) {
       }
 
       // Clerk verify
-      await safeClerkVerify(clerkUserId).catch(() => {
-        console.log('⚠️ Clerk check skipped');
-      });
+      // await safeClerkVerify(clerkUserId).catch(() => {
+      //   console.log('⚠️ Clerk check skipped');
+      // });
+      if (finalClerkUserId) {
+        await safeClerkVerify(finalClerkUserId).catch(() => {
+          console.log('⚠️ Clerk check skipped');
+        });
+      }
 
       const paymentPath = paymentType === 'backer' ? 'backerPayment' : 'stripePayment';
-      const existingPayment = userData?.[paymentPath];
+      // const existingPayment = userData?.[paymentPath];
+      const existingPayment = isRecoveryPayment ? null : userData?.[paymentPath];
 
       let paymentIntent;
       let intentAction = 'created';
@@ -888,7 +1729,7 @@ export default async function handler(req, res) {
       // 🔥 REUSE EXISTING INTENT (your original logic)
       if (existingPayment?.stripePaymentIntentId) {
         try {
-          paymentIntent = await stripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
+          paymentIntent = await activeStripe.paymentIntents.retrieve(existingPayment.stripePaymentIntentId);
           const canUpdate = ['requires_payment_method', 'requires_confirmation', 'requires_action'].includes(paymentIntent.status);
 
           if (canUpdate) {
@@ -897,7 +1738,7 @@ export default async function handler(req, res) {
               intentAction = 'reused';
             } else {
               intentAction = 'updated';
-              paymentIntent = await stripe.paymentIntents.update(existingPayment.stripePaymentIntentId, {
+              paymentIntent = await activeStripe.paymentIntents.update(existingPayment.stripePaymentIntentId, {
                 amount: Math.round(totalAmount * 100),
                 metadata: {
                   ...paymentIntent.metadata,
@@ -923,13 +1764,31 @@ export default async function handler(req, res) {
 
       // 🔥 CREATE NEW INTENT
       if (!paymentIntent) {
-        paymentIntent = await stripe.paymentIntents.create({
+        let baseAmount = 0;
+        let addonAmount = 0;
+
+        if (paymentType === 'deposit') {
+          baseAmount = PRICING.deposit;
+          addonAmount = Array.isArray(addons) && addons.length > 0 ? PRICING.addon : 0;
+        }
+        paymentIntent = await activeStripe.paymentIntents.create({
           amount: Math.round(totalAmount * 100),
           currency: 'usd',
+          customer: customerId, // ⭐ IMPORTANT
+
+          setup_future_usage: 'off_session', // ⭐ IMPORTANT
           metadata: {
-            clerkUserId,
+            clerkUserId: finalClerkUserId,
             firebaseEntryKey: entryKey,
             paymentType,
+            stripeMode: requestedStripeMode,
+            browser: deviceInfo?.browser || '',
+            device: deviceInfo?.device || '',
+            os: deviceInfo?.os || '',
+            recoveryToken: recoveryToken || '',
+            paymentSource: isRecoveryPayment ? 'admin_recovery_link' : 'normal_funnel',
+            paidFromRecoveryLink: isRecoveryPayment ? 'true' : 'false',
+            fullAmount: getPaymentFormAmount(userData?.PaymentFormData).toString(),
             ...(targetPlan && {
               upgrade: "true",
               targetPlan,
@@ -937,6 +1796,8 @@ export default async function handler(req, res) {
             }),
             ...(paymentType === 'backer' && { dynamicAmount: totalAmount.toString() }),
             addons: JSON.stringify(addons),
+            addonAmount: addonAmount.toString(),
+            baseAmount: baseAmount.toString(),
             totalAmount: totalAmount.toString(),
             createdAt: new Date().toISOString()
           }
@@ -963,6 +1824,7 @@ export default async function handler(req, res) {
         paymentType,
         paymentPath,
         amount: totalAmount,
+        mode: requestedStripeMode,
         status: 'ready'
       });
 

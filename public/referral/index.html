@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>You've been invited to Elysium.</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Manrope:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --ink: #1a1a17;
+    --muted: #6b6b66;
+    --bg: #ffffff;
+    --cream: #faf7f2;
+    --card: #ffffff;
+    --rule: #e6e2da;
+    --rule-soft: #ede9e1;
+    --heading-font: 'Instrument Serif', Georgia, serif;
+    --body-font: 'Manrope', system-ui, -apple-system, sans-serif;
+    --transition: 320ms cubic-bezier(.32,.72,.32,1);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: var(--body-font);
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    font-size: 15px;
+    line-height: 1.55;
+    letter-spacing: -0.005em;
+  }
+
+  a { color: inherit; text-decoration: none; }
+  button { font-family: inherit; }
+
+  /* ============ NAV (transparent over hero, then solid) ============ */
+  .nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 40;
+    padding: 20px 40px;
+    display: flex; align-items: center; justify-content: space-between;
+    transition: background-color 320ms ease, backdrop-filter 320ms ease, border-color 320ms ease;
+    border-bottom: 1px solid transparent;
+  }
+  .nav.scrolled {
+    background: rgba(255,255,255,.9);
+    backdrop-filter: saturate(160%) blur(20px);
+    -webkit-backdrop-filter: saturate(160%) blur(20px);
+    border-bottom-color: var(--rule-soft);
+  }
+  .logo {
+    font-family: "ABC Diatype", 'Manrope', sans-serif;
+    font-weight: 600; font-size: 18px;
+    color: #fff;
+    transition: color 320ms ease;
+  }
+  .nav.scrolled .logo { color: var(--ink); }
+  .nav-right { display: flex; align-items: center; gap: 20px; }
+  .nav-right .link {
+    color: #fff;
+    font-size: 12.5px; letter-spacing: .1em; text-transform: uppercase;
+    opacity: .85;
+    transition: color 320ms ease;
+  }
+  .nav.scrolled .nav-right .link { color: var(--ink); }
+  .nav-right .link:hover { opacity: 1; }
+
+  /* ============ HERO ============ */
+  .hero {
+    position: relative;
+    height: 100vh;
+    min-height: 100vh;
+    overflow: hidden;
+    background: #1a1a17;
+  }
+  .hero-img {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    object-position: center center;
+    /* Subtle Ken Burns effect */
+    animation: heroBreath 24s ease-in-out infinite alternate;
+    will-change: transform;
+  }
+  @keyframes heroBreath {
+    from { transform: scale(1.0); }
+    to   { transform: scale(1.06); }
+  }
+  /* Black overlay for image depth and text legibility */
+  .hero::after {
+    content: '';
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(180deg, rgba(0,0,0,.62) 0%, rgba(0,0,0,.42) 42%, rgba(0,0,0,.78) 100%),
+      rgba(0,0,0,.22);
+    pointer-events: none;
+  }
+  .hero-content {
+    position: absolute; inset: 0; z-index: 2;
+    padding: 120px 40px 48px;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    color: #fff;
+    max-width: 1320px; margin: 0 auto;
+  }
+
+  /* Invited-by badge — sits at bottom-left */
+  .invited-by {
+    display: inline-flex; align-items: center; gap: 14px;
+    background: rgba(255,255,255,.14);
+    backdrop-filter: blur(18px) saturate(180%);
+    -webkit-backdrop-filter: blur(18px) saturate(180%);
+    border: 1px solid rgba(255,255,255,.24);
+    padding: 10px 18px 10px 10px;
+    border-radius: 999px;
+    animation: fadeUp 700ms 150ms both cubic-bezier(.2,.7,.2,1);
+    max-width: max-content;
+  }
+  .invited-by .avatar {
+    width: 34px; height: 34px; border-radius: 999px;
+    background: linear-gradient(135deg, #d9b892 0%, #b78860 100%);
+    color: #fff;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-family: var(--heading-font);
+    font-size: 16px; font-weight: 400;
+    letter-spacing: -.01em;
+    border: 1.5px solid rgba(255,255,255,.35);
+    flex-shrink: 0;
+  }
+  .invited-by .txt { display: flex; flex-direction: column; line-height: 1.25; }
+  .invited-by .k {
+    font-size: 10px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,.7);
+    font-weight: 500;
+  }
+  .invited-by .v { font-size: 13.5px; font-weight: 500; color: #fff; }
+
+  /* Hero headline pinned to lower-center */
+  .hero-title {
+    margin-top: 16px;
+    max-width: 780px;
+    animation: fadeUp 800ms 280ms both cubic-bezier(.2,.7,.2,1);
+  }
+  .hero-title h1 {
+    font-family: var(--heading-font);
+    font-size: clamp(38px, 5.6vw, 76px);
+    font-weight: 400;
+    line-height: 1.02;
+    letter-spacing: -.022em;
+    color: #fff;
+    margin: 0;
+    text-wrap: pretty;
+  }
+  .hero-title h1 em {
+    font-style: italic;
+    font-family: var(--heading-font);
+    opacity: .96;
+  }
+  .hero-title .sub {
+    margin-top: 18px;
+    color: rgba(255,255,255,.86);
+    font-size: 16px;
+    line-height: 1.5;
+    max-width: 520px;
+  }
+
+  /* Bullets — compact story-in-4-lines pinned inside the hero */
+  .hero-bullets {
+    list-style: none;
+    margin: 28px 0 0;
+    padding: 0;
+    max-width: 760px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    animation: fadeUp 800ms 380ms both cubic-bezier(.2,.7,.2,1);
+  }
+  .hero-bullets li {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: start;
+    gap: 10px;
+    min-width: 0;
+    padding: 12px 14px;
+    border: 1px solid rgba(255,255,255,.16);
+    border-radius: 14px;
+    background: rgba(0,0,0,.24);
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
+    color: rgba(255,255,255,.9);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .hero-bullets li b {
+    display: block;
+    margin-bottom: 2px;
+    color: #fff;
+    font-weight: 700;
+  }
+  .hero-bullets .tick {
+    color: #fff;
+    opacity: .75;
+    font-size: 11px;
+    letter-spacing: 0;
+    flex-shrink: 0;
+    transform: translateY(2px);
+    font-family: var(--heading-font);
+  }
+
+  /* Actions row — CTA + price sitting side by side */
+  .hero-actions {
+    margin-top: 30px;
+    display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+    animation: fadeUp 800ms 500ms both cubic-bezier(.2,.7,.2,1);
+  }
+  .hero-cta {
+    background: #fff;
+    color: var(--ink);
+    padding: 18px 34px;
+    font-size: 14.5px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.25);
+  }
+  .hero-cta:hover {
+    background: #fff;
+    color: var(--ink);
+    transform: translateY(-2px);
+    box-shadow: 0 18px 50px rgba(0,0,0,.35);
+  }
+  .hero-price {
+    display: inline-flex; align-items: baseline; gap: 8px;
+    color: rgba(255,255,255,.85);
+    font-size: 12.5px;
+    letter-spacing: .01em;
+  }
+  .hero-price b {
+    color: #fff;
+    font-family: var(--heading-font);
+    font-size: 22px;
+    font-weight: 400;
+    letter-spacing: -.005em;
+  }
+  .hero-price b em {
+    font-style: normal;
+    font-family: var(--body-font);
+    font-size: 12.5px;
+    font-weight: 500;
+    color: rgba(255,255,255,.7);
+    margin-left: -3px;
+  }
+
+  /* Scroll cue */
+  .scroll-cue {
+    position: absolute;
+    right: 40px; bottom: 44px; z-index: 2;
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+    color: rgba(255,255,255,.75);
+    font-size: 10.5px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    animation: fadeUp 700ms 500ms both cubic-bezier(.2,.7,.2,1);
+  }
+  .scroll-cue .line {
+    width: 1px; height: 46px;
+    background: linear-gradient(180deg, rgba(255,255,255,.6), rgba(255,255,255,0));
+    position: relative;
+    overflow: hidden;
+  }
+  .scroll-cue .line::after {
+    content: '';
+    position: absolute;
+    top: -20px; left: 0; right: 0; height: 20px;
+    background: linear-gradient(180deg, rgba(255,255,255,0), rgba(255,255,255,.95));
+    animation: scrollLine 2.4s cubic-bezier(.4,0,.2,1) infinite;
+  }
+  @keyframes scrollLine {
+    0%   { top: -20px; }
+    100% { top: 100%; }
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* ============ PITCH SECTION ============ */
+  .pitch {
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 100px 40px 60px;
+    text-align: center;
+    position: relative;
+  }
+  /* Thin decorative rule above pitch */
+  .pitch::before {
+    content: '';
+    display: block;
+    width: 1px; height: 40px;
+    background: var(--rule);
+    margin: 0 auto 40px;
+  }
+  .pitch .eyebrow {
+    display: inline-block;
+    font-size: 10.5px;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+    margin-bottom: 22px;
+  }
+  .pitch h2 {
+    font-family: var(--heading-font);
+    font-size: clamp(30px, 3.4vw, 46px);
+    font-weight: 400;
+    letter-spacing: -.02em;
+    line-height: 1.08;
+    margin: 0 0 22px;
+    max-width: 780px; margin-left: auto; margin-right: auto;
+    text-wrap: balance;
+  }
+  .pitch .lede {
+    color: var(--muted);
+    font-size: 17px;
+    line-height: 1.65;
+    max-width: 620px;
+    margin: 0 auto;
+    text-wrap: pretty;
+  }
+  .pitch .lede b { color: var(--ink); font-weight: 500; }
+
+  /* ============ BULLET GRID (2×2) ============ */
+  .benefits {
+    max-width: 1080px;
+    margin: 60px auto 0;
+    padding: 0 40px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1px;
+    background: var(--rule-soft);
+    border: 1px solid var(--rule-soft);
+    border-radius: 20px;
+    overflow: hidden;
+  }
+  .benefit {
+    background: var(--card);
+    padding: 32px 30px;
+    display: flex; flex-direction: column; gap: 8px;
+    position: relative;
+  }
+  .benefit .num {
+    font-family: var(--heading-font);
+    font-size: 15px;
+    color: var(--muted);
+    letter-spacing: 0;
+    margin-bottom: 2px;
+  }
+  .benefit h3 {
+    font-family: var(--heading-font);
+    font-size: 26px;
+    font-weight: 400;
+    letter-spacing: -.015em;
+    line-height: 1.15;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .benefit p {
+    color: var(--muted);
+    font-size: 13.5px;
+    line-height: 1.55;
+    margin: 4px 0 0;
+    text-wrap: pretty;
+  }
+
+  /* ============ PRICE + CTA BLOCK ============ */
+  .cta-block {
+    max-width: 720px;
+    margin: 80px auto 0;
+    padding: 0 40px;
+    text-align: center;
+  }
+  .price-lede {
+    font-size: 12px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+    font-weight: 600;
+  }
+  .price-value {
+    font-family: var(--heading-font);
+    font-size: clamp(44px, 6vw, 68px);
+    font-weight: 400;
+    letter-spacing: -.02em;
+    line-height: 1;
+    color: var(--ink);
+  }
+  .price-value .per {
+    font-size: 20px;
+    color: var(--muted);
+    letter-spacing: 0;
+  }
+  .price-hint {
+    margin-top: 14px;
+    font-size: 13.5px;
+    color: var(--muted);
+    max-width: 460px;
+    margin-left: auto; margin-right: auto;
+    line-height: 1.55;
+  }
+  .price-hint b { color: var(--ink); font-weight: 500; }
+
+  .cta-primary {
+    display: inline-flex; align-items: center; gap: 14px;
+    background: var(--ink);
+    color: #fff;
+    border: none;
+    padding: 20px 44px;
+    border-radius: 999px;
+    font-family: var(--body-font);
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: .01em;
+    cursor: pointer;
+    margin-top: 30px;
+    transition:
+      background-color 320ms cubic-bezier(.32,.72,.32,1),
+      transform 220ms cubic-bezier(.32,.72,.32,1),
+      box-shadow 320ms cubic-bezier(.32,.72,.32,1);
+  }
+  .cta-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 12px 32px rgba(20,20,15,.18);
+  }
+  .cta-primary svg {
+    width: 14px; height: 14px;
+    transition: transform 320ms cubic-bezier(.32,.72,.32,1);
+  }
+  .cta-primary:hover svg { transform: translateX(3px); }
+  .hero-actions .hero-cta {
+    background: #fff;
+    color: var(--ink);
+    box-shadow: 0 12px 40px rgba(0,0,0,.25);
+  }
+  .hero-actions .hero-cta:hover {
+    background: #fff;
+    color: var(--ink);
+    box-shadow: 0 18px 50px rgba(0,0,0,.35);
+  }
+
+  .fine {
+    margin-top: 20px;
+    font-size: 11.5px;
+    color: var(--muted);
+    letter-spacing: .01em;
+  }
+
+  /* ============ FOOTER SECTION — reciprocal reward reminder ============ */
+  .reciprocal {
+    max-width: 720px;
+    margin: 80px auto 0;
+    padding: 32px 36px;
+    background: var(--cream);
+    border: 1px solid var(--rule-soft);
+    border-radius: 16px;
+    display: flex; align-items: center; gap: 20px;
+    text-align: left;
+  }
+  .reciprocal .icon {
+    width: 46px; height: 46px;
+    border-radius: 999px;
+    background: var(--ink);
+    color: #fff;
+    display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    font-family: var(--heading-font);
+    font-size: 22px;
+  }
+  .reciprocal .txt b {
+    display: block;
+    font-family: var(--heading-font);
+    font-size: 22px;
+    font-weight: 400;
+    letter-spacing: -.01em;
+    margin-bottom: 4px;
+  }
+  .reciprocal .txt span {
+    color: var(--muted);
+    font-size: 13.5px;
+    line-height: 1.55;
+  }
+
+  /* ============ SITE FOOTER ============ */
+  .site-footer {
+    margin-top: 100px;
+    padding: 40px 40px 32px;
+    border-top: 1px solid var(--rule-soft);
+    text-align: center;
+    color: var(--muted);
+    font-size: 11.5px;
+    letter-spacing: .01em;
+  }
+  .site-footer a { text-decoration: underline; text-decoration-color: var(--rule); text-underline-offset: 3px; }
+
+  /* ============ RESPONSIVE ============ */
+  @media (max-width: 900px) {
+    .nav { padding: 16px 24px; }
+    .hero-content { padding: 100px 24px 36px; }
+    .hero-title { max-width: 100%; }
+    .hero-bullets { grid-template-columns: 1fr; gap: 6px 0; max-width: 100%; }
+    .pitch { padding: 80px 24px 40px; }
+    .benefits { padding: 0 24px; grid-template-columns: 1fr; }
+    .cta-block { padding: 0 24px; }
+    .reciprocal { flex-direction: column; text-align: center; padding: 28px 24px; }
+    .site-footer { padding: 32px 24px 24px; }
+    .scroll-cue { right: 24px; bottom: 32px; }
+  }
+  @media (max-width: 560px) {
+    .hero { height: 100vh; min-height: 100vh; }
+    .hero-content { padding: 100px 24px 40px; }
+    .hero-title h1 { font-size: 36px; }
+    .hero-title .sub { font-size: 14.5px; margin-top: 14px; }
+    .hero-bullets { margin-top: 20px; font-size: 13px; }
+    .hero-actions { margin-top: 24px; gap: 16px; }
+    .hero-cta { padding: 16px 28px; font-size: 14px; }
+    .nav-right .link { display: none; }
+    .price-value { font-size: 48px; }
+    .cta-primary { padding: 18px 32px; font-size: 14px; }
+    .scroll-cue { display: none; }
+  }
+
+  /* Motion sensitivity */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+    }
+    .hero-img { animation: none; transform: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============ NAV ============ -->
+<nav class="nav" id="nav">
+  <div class="nav-right">
+    <a class="link" href="#pitch">Learn more</a>
+  </div>
+</nav>
+
+<!-- ============ HERO ============ -->
+<section class="hero">
+  <img class="hero-img" src="assets/referral-hero.jpg" alt="A canal-side balcony at dusk with a hammock overlooking a Venetian-inspired waterway and stone architecture." />
+
+  <div class="hero-content">
+    <div class="invited-by">
+      <div class="avatar" id="avatar">S</div>
+      <div class="txt">
+        <span class="k">You've been invited by</span>
+        <span class="v" id="referrer-name">Sarah</span>
+      </div>
+    </div>
+
+    <div class="hero-title">
+      <h1><span id="referrer-first">Sarah</span> wants you to move here <em>together</em>.</h1>
+    </div>
+
+    <ul class="hero-bullets">
+      <li><span class="tick" aria-hidden="true">✦</span><span><b>Complimentary dining</b>Two organic meals daily, grown on-site</span></li>
+      <li><span class="tick" aria-hidden="true">✦</span><span><b>Shared Teslas</b>Never buy or maintain a car again</span></li>
+      <li><span class="tick" aria-hidden="true">✦</span><span><b>100+ acres of nature</b>Trails, canals, animal sanctuary</span></li>
+      <li><span class="tick" aria-hidden="true">✦</span><span><b>5-star amenities</b>Wellness, gyms, saunas, co-working</span></li>
+    </ul>
+
+    <div class="hero-actions">
+      <button class="cta-primary hero-cta" id="claim-cta-hero">
+        Claim your spot
+        <svg viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3 7H11M11 7L7 3M11 7L7 11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </button>
+      <div class="hero-price">
+        <span>Starting at$1,925/mo · limited spaces · free to join waitlist today</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="scroll-cue" aria-hidden="true">
+    <span>See more</span>
+    <span class="line"></span>
+  </div>
+</section>
+
+<!-- ============ PITCH ============ -->
+<section class="pitch" id="pitch">
+  <span class="eyebrow">Elysium One · Estimated 2030</span>
+  <h2>An experiential village, built for the way we actually want to live.</h2>
+  <p class="lede">
+    <b>100+ acres of nature.</b> A microcity where complimentary organic dining, shared Teslas, wellness clinics, and cinema-quality co-working spaces are all part of your membership — not an upsell.
+  </p>
+</section>
+
+<!-- ============ BENEFITS 2×2 ============ -->
+<div class="benefits">
+  <div class="benefit">
+    <div class="num">01</div>
+    <h3>Complimentary dining</h3>
+    <p>Two farm-to-table meals a day, made on-site with produce grown right in the community.</p>
+  </div>
+  <div class="benefit">
+    <div class="num">02</div>
+    <h3>Shared Teslas</h3>
+    <p>Never buy or maintain a car again. Book a community Tesla whenever you need one.</p>
+  </div>
+  <div class="benefit">
+    <div class="num">03</div>
+    <h3>100+ acres of nature</h3>
+    <p>Trails, canals, a glowing river, and an animal sanctuary — all inside your neighborhood.</p>
+  </div>
+  <div class="benefit">
+    <div class="num">04</div>
+    <h3>Five-star amenities</h3>
+    <p>Wellness clinics, gyms, saunas, cold plunges, cinemas, cafés, and co-working spaces.</p>
+  </div>
+</div>
+
+<!-- ============ CTA BLOCK ============ -->
+<section class="cta-block">
+  <div class="price-lede">Membership starting at</div>
+  <div class="price-value">$1,925<span class="per"> / month</span></div>
+  <div class="price-hint">
+    Well below market rent — and <b>you and <span id="referrer-first-2">Sarah</span> both earn free months of living</b> when you claim your spot.
+  </div>
+
+  <button class="cta-primary" id="claim-cta">
+    Claim your spot
+    <svg viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M3 7H11M11 7L7 3M11 7L7 11" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+  </button>
+  <div class="fine">Free to join. You won't be charged today.</div>
+</section>
+
+<!-- ============ RECIPROCAL BOX ============ -->
+<div class="reciprocal">
+  <div class="icon">★</div>
+  <div class="txt">
+    <b>You both get rewarded.</b>
+    <span>When you're approved and reserve your spot, <span id="referrer-first-3">Sarah</span> gets free months of living toward her membership — and so do you. It's Elysium's way of thanking the neighbors who bring the best neighbors.</span>
+  </div>
+</div>
+
+<!-- ============ FOOTER ============ -->
+<footer class="site-footer">
+  <p>
+    Elysium Communities · Coming 2030 · <a href="#">elysiumcommunities.com</a>
+  </p>
+</footer>
+
+<script>
+  window.API_BASE = window.API_BASE || '';
+
+  // ============ Referral tracking + personalization ============
+  (function () {
+    const params = new URLSearchParams(window.location.search);
+    const userId = params.get('userId') || params.get('referredBy') || '';
+    const uniqueId = params.get('uniqueId') || params.get('referralId') || params.get('ref') || '';
+    const referralQuery = params.toString();
+
+    function nameFromCode(code) {
+      const raw = String(code || '').split('-')[0];
+      if (raw && /^[a-zA-Z]{2,}$/.test(raw)) {
+        return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+      }
+      return 'Your friend';
+    }
+
+    function setReferrerName(displayName) {
+      const cleanName = String(displayName || '').trim() || 'Your friend';
+      const firstName = cleanName === 'Your friend' ? cleanName : cleanName.split(/\s+/)[0];
+
+      const fullNameEl = document.getElementById('referrer-name');
+      if (fullNameEl) fullNameEl.textContent = cleanName;
+
+      ['referrer-first', 'referrer-first-2', 'referrer-first-3'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = firstName;
+      });
+
+      const avatar = document.getElementById('avatar');
+      if (avatar) avatar.textContent = firstName.charAt(0).toUpperCase();
+    }
+
+    function persistReferral(referrerId, referralId) {
+      if (referralQuery) sessionStorage.setItem('elysium_referral_query', referralQuery);
+      if (referralId) {
+        sessionStorage.setItem('elysium_ref', referralId);
+        localStorage.setItem('referral_uniqueId', referralId);
+        localStorage.setItem('Ref-Id', referralId);
+        localStorage.setItem('elysium_referral_id', referralId);
+      }
+      if (referrerId) {
+        localStorage.setItem('ReferredBy', referrerId);
+        localStorage.setItem('elysium_referred_by', referrerId);
+      }
+    }
+
+    async function trackReferralOpen(referrerId, referralId) {
+      if (!referrerId || !referralId) return;
+      const trackedKey = `elysium_referralpost_opened_${referralId}`;
+      if (localStorage.getItem(trackedKey) === 'true') return;
+
+      try {
+        const response = await fetch(`${window.API_BASE}/api/referrals?action=track`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            referrerId,
+            referralId,
+            status: 'opened',
+            source: 'referralpost',
+            eventSourceUrl: window.location.href
+          })
+        });
+
+        if (response.ok) {
+          localStorage.setItem(trackedKey, 'true');
+          persistReferral(referrerId, referralId);
+        }
+      } catch (error) {
+        console.warn('Referral open tracking failed:', error);
+      }
+    }
+
+    async function loadReferrerName(referrerId) {
+      if (!referrerId) return;
+
+      try {
+        const response = await fetch(`${window.API_BASE}/api/referrals?action=referrer&userId=${encodeURIComponent(referrerId)}`);
+        const data = await response.json();
+        if (data?.success) setReferrerName(data.displayName || data.firstname || 'Your friend');
+      } catch (error) {
+        console.warn('Failed to load referrer name:', error);
+      }
+    }
+
+    setReferrerName(nameFromCode(uniqueId));
+    persistReferral(userId, uniqueId);
+    trackReferralOpen(userId, uniqueId);
+    loadReferrerName(userId);
+  })();
+
+  // ============ Nav appearance on scroll ============
+  (function () {
+    const nav = document.getElementById('nav');
+    let last = -1;
+    const onScroll = () => {
+      const y = window.scrollY;
+      const scrolled = y > 60;
+      if (scrolled !== (last > 60)) {
+        nav.classList.toggle('scrolled', scrolled);
+      }
+      last = y;
+    };
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+  })();
+
+  // ============ CTA — advance to email gate / options page ============
+  (function () {
+    const btns = document.querySelectorAll('#claim-cta, #claim-cta-hero');
+    if (!btns.length) return;
+    const advance = () => {
+      // Clear any lingering local state so the new user starts fresh
+      ['elysium_config','elysium_intake','elysium_step','elysium_referral_code','elysium_position'].forEach(k => localStorage.removeItem(k));
+      // Preserve ref code in URL so backend can credit the referrer
+      const referralQuery = sessionStorage.getItem('elysium_referral_query') || '';
+      const referredBy = localStorage.getItem('elysium_referred_by') || localStorage.getItem('ReferredBy') || '';
+      const referralId = localStorage.getItem('elysium_referral_id') || localStorage.getItem('Ref-Id') || sessionStorage.getItem('elysium_ref') || '';
+      const fallbackQuery = referredBy && referralId
+        ? `userId=${encodeURIComponent(referredBy)}&uniqueId=${encodeURIComponent(referralId)}`
+        : '';
+      const target = '/join-waitlist' + (referralQuery ? ('?' + referralQuery) : (fallbackQuery ? ('?' + fallbackQuery) : ''));
+      try {
+        if (window.top && window.top !== window) {
+          window.top.location.href = target;
+          return;
+        }
+      } catch (error) {
+        console.warn('Top navigation fallback engaged:', error);
+      }
+      window.location.href = target;
+    };
+    btns.forEach(b => b.addEventListener('click', advance));
+  })();
+</script>
+
+</body>
+</html>

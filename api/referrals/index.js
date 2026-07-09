@@ -35,6 +35,7 @@ export default async function handler(req, res) {
   try {
   switch (action) {
     case 'generate-link': return await handleGenerateLink(req, res);
+    case 'referrer': return await handleGetReferrer(req, res);
     case 'submit-form': return await handleSubmitForm(req, res);
     case 'send-email': return await handleSendEmail(req, res);
     case 'track': return await handleTrackReferral(req, res);
@@ -43,7 +44,7 @@ export default async function handler(req, res) {
 
     default: return res.status(400).json({
       error: 'Invalid action',
-      available: ['generate-link', 'submit-form', 'send-email', 'track', 'signup', 'email-signup']  // ✅ ALL 6 actions
+      available: ['generate-link', 'referrer', 'submit-form', 'send-email', 'track', 'signup', 'email-signup']  // ✅ ALL 7 actions
     });
   }
 } catch (error) {
@@ -51,6 +52,72 @@ export default async function handler(req, res) {
   res.status(500).json({ error: 'Internal server error' });
 }
 
+}
+
+function buildDisplayName(data = {}) {
+  const firstName = String(data.firstname || data.firstName || '').trim();
+  const lastName = String(data.lastname || data.lastName || '').trim();
+  const fullName = String(data.name || '').trim();
+
+  if (firstName || lastName) return `${firstName} ${lastName}`.trim();
+  if (fullName) return fullName;
+  return '';
+}
+
+async function handleGetReferrer(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'GET required' });
+
+  const userId = String(req.query.userId || req.query.referrerId || '').trim();
+
+  if (!userId) {
+    return res.status(400).json({ error: 'Missing userId' });
+  }
+
+  try {
+    const userSnap = await db.ref(`users/${userId}`).once('value');
+
+    if (userSnap.exists()) {
+      const user = userSnap.val() || {};
+      const displayName = buildDisplayName(user);
+
+      return res.json({
+        success: true,
+        userId,
+        firstname: user.firstname || user.firstName || '',
+        lastname: user.lastname || user.lastName || '',
+        displayName: displayName || 'A friend',
+      });
+    }
+
+    const mainformSnap = await db.ref('Mainformdata')
+      .orderByChild('uid')
+      .equalTo(userId)
+      .once('value');
+
+    let referrerData = null;
+    if (mainformSnap.exists()) {
+      mainformSnap.forEach((child) => {
+        if (!referrerData) referrerData = child.val();
+      });
+    }
+
+    if (!referrerData) {
+      return res.status(404).json({ error: 'Referrer not found' });
+    }
+
+    const displayName = buildDisplayName(referrerData);
+
+    return res.json({
+      success: true,
+      userId,
+      firstname: referrerData.firstname || referrerData.firstName || '',
+      lastname: referrerData.lastname || referrerData.lastName || '',
+      displayName: displayName || 'A friend',
+    });
+  } catch (error) {
+    console.error('Get referrer error:', error);
+    return res.status(500).json({ error: 'Failed to fetch referrer' });
+  }
 }
 
 async function handleGenerateLink(req, res) {
@@ -63,11 +130,14 @@ async function handleGenerateLink(req, res) {
     res.status(200).end();
     return;
   }
-  const { clerkUserId } = req.query;
+  const { clerkUserId, destination } = req.query;
   if (!clerkUserId) return res.status(400).json({ error: 'Missing clerkUserId' });
 
   const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  const referralLink = `https://elysiumcommunities.com/referralpost?userId=${clerkUserId}&uniqueId=${uniqueId}`;
+  const referralBaseUrl = 'https://join.elysiumcommunities.com/referralpost';
+  const referralLink = destination === 'funnel-v3'
+    ? `https://join.elysiumcommunities.com/join-waitlist?userId=${encodeURIComponent(clerkUserId)}&uniqueId=${encodeURIComponent(uniqueId)}`
+    : `${referralBaseUrl}?userId=${encodeURIComponent(clerkUserId)}&uniqueId=${encodeURIComponent(uniqueId)}`;
 
   res.json({
     success: true,
@@ -132,7 +202,12 @@ async function handleSendEmail(req, res) {
     const { email, referralLink } = body;
 
     if (!email || !isValidEmail(email)) return res.status(400).json({ error: 'Invalid email' });
-    if (!referralLink || !referralLink.startsWith('https://elysiumcommunities.com')) {
+    const allowedReferralHosts = [
+      'https://elysiumcommunities.com',
+      'https://www.elysiumcommunities.com',
+      'https://elysium-apis.vercel.app',
+    ];
+    if (!referralLink || !allowedReferralHosts.some((host) => referralLink.startsWith(host))) {
       return res.status(400).json({ error: 'Invalid referral link' });
     }
 
@@ -208,8 +283,8 @@ async function handleTrackReferral(req, res) {
     const body = await parseBody(req);
     const { referralId, status, referrerId } = body;
 
-    if (!referralId || !status) {
-      return res.status(400).json({ error: 'Missing referralId or status' });
+    if (!referrerId || !referralId || !status) {
+      return res.status(400).json({ error: 'Missing referrerId, referralId, or status' });
     }
 
     const refKey = referralId;
@@ -412,5 +487,3 @@ async function handleEmailSignup(req, res) {
     res.status(500).json({ error: 'Signup failed: ' + error.message });
   }
 }
-
-

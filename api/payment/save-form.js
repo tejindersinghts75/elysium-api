@@ -1,11 +1,12 @@
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
+import { BrevoClient } from "@getbrevo/brevo";
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 const app = initializeApp({
   credential: cert(serviceAccount),
   //databaseURL: "https://alcester-578d6-default-rtdb.firebaseio.com/"
-    databaseURL:process.env.FIREBASE_URL
+  databaseURL: process.env.FIREBASE_URL
 });
 const db = getDatabase(app);
 
@@ -104,7 +105,17 @@ export default async function handler(req, res) {
       console.warn('⚠️ Unit parsing failed:', e.message);
       parsedUnit = [];
     }
+    let selectedUnitName = "N/A";
 
+    if (Array.isArray(parsedUnit)) {
+      const selectedUnit = parsedUnit.find(
+        item => item.selected === "selected"
+      );
+
+      if (selectedUnit && selectedUnit.text) {
+        selectedUnitName = selectedUnit.text;
+      }
+    }
     // Save PaymentFormData
     const paymentData = {
       useremail,
@@ -113,13 +124,83 @@ export default async function handler(req, res) {
       chooseterm: chooseterm || '',
       selectapplication: selectapplication || '',
       diningpackage: diningpackage || '',
-      priceperfoot:priceperfoot||'',
+      priceperfoot: priceperfoot || '',
       submittedAt: Date.now()
     };
 
     await db.ref(`Mainformdata/${entryKey}/PaymentFormData`).set(paymentData);
+    // await db.ref(`Mainformdata/${entryKey}/resume`).update({
+    //   step2Completed: true,
+    //   currentStep: 3,
+    //   lastCompletedStep: 2,
+
+    // });
+    const selectedApplication = String(selectapplication || '').trim();
+
+    let resumeUpdate = {
+      step2Completed: true,
+    };
+
+    if (selectedApplication === '99') {
+      resumeUpdate.currentStep = 2;
+      resumeUpdate.lastCompletedStep = 1;
+      resumeUpdate.earlyApplicationPaid = false;
+      resumeUpdate.earlyApplicationPaymentRequired = true;
+    }
+
+    if (selectedApplication === '0' || selectedApplication === 'standard') {
+      resumeUpdate.currentStep = 3;
+      resumeUpdate.lastCompletedStep = 2;
+      resumeUpdate.earlyApplicationPaid = false;
+      resumeUpdate.earlyApplicationPaymentRequired = false;
+    }
+
+    await db.ref(`Mainformdata/${entryKey}/resume`).update(resumeUpdate);
 
     console.log('💾 SAVED to:', entryKey);
+
+    // =========================
+    // BREVO CODE START
+    // =========================
+    try {
+      const client = new BrevoClient({
+        apiKey: process.env.BREVO_API_KEY,
+      });
+
+      const emailLower = useremail.toLowerCase();
+
+      await fetch("https://api.brevo.com/v3/contacts", {
+        method: "POST",
+        headers: {
+          "api-key": process.env.BREVO_API_KEY,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          email: emailLower,
+          attributes: {
+            UNIT_TYPE: selectedUnitName,
+            FOUNDING_BACKER_PLEDGE_TOTAL: priceperfoot,
+            CUSTOMIZATION_COMPLETED: true,
+            CUSTOMIZATION_COMPLETED_AT: new Date().toISOString()
+          },
+          updateEnabled: true
+        })
+      });
+
+      await client.event.createEvent({
+        event_name: "unit_customization_completed",
+        identifiers: {
+          email_id: emailLower
+        }
+      });
+
+      console.log("✅ Step 2 Brevo event sent");
+    } catch (brevoError) {
+      console.error("❌ Brevo error:", brevoError.message || brevoError);
+    }
+    // =========================
+    // BREVO CODE END
+    // =========================
 
     res.json({
       success: true,
